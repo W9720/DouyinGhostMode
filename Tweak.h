@@ -41,4 +41,13 @@ static inline BOOL DYGhostGetBool(NSString *key) {
     return [[NSUserDefaults standardUserDefaults] boolForKey:key];
 }
 
+static inline void DYGhostSetBool(NSString *key, BOOL value) {
+    [[NSUserDefaults standardUserDefaults] setBool:value forKey:key];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+@interface DYGhostSettingsPresenter : NSObject
++ (void)showSettingsFrom:(UIViewController *)presenter;
+@end
+
 #endif

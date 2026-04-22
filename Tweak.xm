@@ -248,7 +248,7 @@
 
 
 // ==========================================
-// 🚪 入口：双指长按打开设置
+// 🚪 入口：摇一摇打开设置
 // ==========================================
 
 %hook UIWindow
@@ -256,17 +256,25 @@
 - (instancetype)initWithFrame:(CGRect)frame {
     UIWindow *window = %orig;
     if (window) {
-        UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(dy_ghostLongPress:)];
-        gesture.numberOfTouchesRequired = 2;
-        gesture.minimumPressDuration = 1.0;
-        [window addGestureRecognizer:gesture];
+        [self dy_ghostSetupMotionDetection];
     }
     return window;
 }
 
 %new
-- (void)dy_ghostLongPress:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state == UIGestureRecognizerStateBegan) {
+- (void)dy_ghostSetupMotionDetection {
+    UIApplication *app = [UIApplication sharedApplication];
+    [app setApplicationSupportsShakeToEdit:YES];
+    [self becomeFirstResponder];
+}
+
+- (BOOL)canBecomeFirstResponder {
+    return YES;
+}
+
+- (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
+    %orig;
+    if (motion == UIEventSubtypeMotionShake) {
         UIViewController *rootVC = self.rootViewController;
         if (rootVC) {
             DYGhostSettingsViewController *settingsVC = [[DYGhostSettingsViewController alloc] init];

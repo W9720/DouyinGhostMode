@@ -1,0 +1,9 @@
+Package: com.dyyy.douyinghostmode
+Name: DouyinGhostMode
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: 抖音隐身模式插件 - 直播间隐身进场 + 无痕浏览
+Maintainer: 喜爱民谣
+Author: 喜爱民谣
+Section: Tweaks
+Depends: mobilesubstrate

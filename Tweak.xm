@@ -8,12 +8,6 @@
 @property (nonatomic) BOOL displayEntranceEffect;
 @end
 
-@interface IESLiveUserModel : NSObject
-@property (nonatomic) BOOL secret;
-@property (nonatomic) BOOL isSecret;
-@property (nonatomic) BOOL displayEntranceEffect;
-@end
-
 @interface AWEUserModel : NSObject
 @property (nonatomic) BOOL isSecret;
 @end
@@ -22,7 +16,31 @@
 + (void)eventV3:(NSString *)event params:(NSDictionary *)params;
 @end
 
-@interface Tracker : NSObject
+@interface BDTrackerIMPL : NSObject
++ (void)eventV3:(NSString *)event params:(NSDictionary *)params;
+@end
+
+@interface TTTracker : NSObject
++ (void)eventV3:(NSString *)event params:(NSDictionary *)params;
+@end
+
+@interface TTTrackerIMPL : NSObject
++ (void)eventV3:(NSString *)event params:(NSDictionary *)params;
+@end
+
+@interface BDTGTrackerKit : NSObject
++ (void)eventV3:(NSString *)event params:(NSDictionary *)params;
+@end
+
+@interface IESLCTrackerService : NSObject
++ (void)event:(NSString *)event params:(NSDictionary *)params;
+@end
+
+@interface BDECIMTracker : NSObject
++ (void)event:(NSString *)event params:(NSDictionary *)params;
+@end
+
+@interface BDPlatformSDKTracker : NSObject
 + (void)event:(NSString *)event params:(NSDictionary *)params;
 @end
 
@@ -31,25 +49,6 @@
 // ==========================================
 
 %hook HTSLiveUser
-
-- (BOOL)secret {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return YES;
-    return %orig;
-}
-
-- (BOOL)isSecret {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return YES;
-    return %orig;
-}
-
-- (BOOL)displayEntranceEffect {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return NO;
-    return %orig;
-}
-
-%end
-
-%hook IESLiveUserModel
 
 - (BOOL)secret {
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return YES;
@@ -78,46 +77,78 @@
 %end
 
 // ==========================================
-// Browse Ghost Mode
+// Browse Ghost Mode - ALL confirmed existing classes
 // ==========================================
 
-%hook BDTrackerProtocol
-
-+ (void)eventV3:(NSString *)event params:(NSDictionary *)params {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYGhostMode"]) {
-        NSArray *blockedEvents = @[
-            @"enter_personal_detail",
-            @"profile_pv",
-            @"others_homepage",
-            @"visit_profile",
-            @"shoot_record_play"
-        ];
-        if ([blockedEvents containsObject:event]) {
-            return;
-        }
+static BOOL DYGhostShouldBlockEvent(NSString *event) {
+    if (!event || ![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYGhostMode"]) return NO;
+    NSArray *blockedEvents = @[
+        @"enter_personal_detail",
+        @"profile_pv",
+        @"others_homepage",
+        @"visit_profile",
+        @"shoot_record_play"
+    ];
+    for (NSString *keyword in blockedEvents) {
+        if ([event containsString:keyword]) return YES;
     }
-    %orig;
+    return NO;
 }
 
+%hook BDTrackerProtocol
++ (void)eventV3:(NSString *)event params:(NSDictionary *)params {
+    if (DYGhostShouldBlockEvent(event)) return;
+    %orig;
+}
 %end
 
-%hook Tracker
-
-+ (void)event:(NSString *)event params:(NSDictionary *)params {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYGhostMode"]) {
-        NSArray *blockedEvents = @[
-            @"enter_personal_detail",
-            @"profile_pv",
-            @"others_homepage",
-            @"visit_profile"
-        ];
-        if ([blockedEvents containsObject:event]) {
-            return;
-        }
-    }
+%hook BDTrackerIMPL
++ (void)eventV3:(NSString *)event params:(NSDictionary *)params {
+    if (DYGhostShouldBlockEvent(event)) return;
     %orig;
 }
+%end
 
+%hook TTTracker
++ (void)eventV3:(NSString *)event params:(NSDictionary *)params {
+    if (DYGhostShouldBlockEvent(event)) return;
+    %orig;
+}
+%end
+
+%hook TTTrackerIMPL
++ (void)eventV3:(NSString *)event params:(NSDictionary *)params {
+    if (DYGhostShouldBlockEvent(event)) return;
+    %orig;
+}
+%end
+
+%hook BDTGTrackerKit
++ (void)eventV3:(NSString *)event params:(NSDictionary *)params {
+    if (DYGhostShouldBlockEvent(event)) return;
+    %orig;
+}
+%end
+
+%hook IESLCTrackerService
++ (void)event:(NSString *)event params:(NSDictionary *)params {
+    if (DYGhostShouldBlockEvent(event)) return;
+    %orig;
+}
+%end
+
+%hook BDECIMTracker
++ (void)event:(NSString *)event params:(NSDictionary *)params {
+    if (DYGhostShouldBlockEvent(event)) return;
+    %orig;
+}
+%end
+
+%hook BDPlatformSDKTracker
++ (void)event:(NSString *)event params:(NSDictionary *)params {
+    if (DYGhostShouldBlockEvent(event)) return;
+    %orig;
+}
 %end
 
 // ==========================================
@@ -125,50 +156,6 @@
 // ==========================================
 
 static BOOL _dyGhostAlertShowing = NO;
-
-static NSString *DYGhostScanResult(void) {
-    NSMutableString *result = [NSMutableString string];
-
-    NSArray *knownClasses = @[
-        @"BDTrackerProtocol",
-        @"Tracker",
-        @"HTSLiveUser",
-        @"IESLiveUserModel",
-        @"AWEUserModel"
-    ];
-
-    [result appendString:@"== Known Classes ==\n"];
-    for (NSString *name in knownClasses) {
-        Class cls = NSClassFromString(name);
-        [result appendFormat:@"%@: %@\n", name, cls ? @"FOUND" : @"MISSING"];
-    }
-
-    [result appendString:@"\n== Tracker Classes with event methods ==\n"];
-    unsigned int classCount = 0;
-    Class *classes = objc_copyClassList(&classCount);
-    NSMutableArray *trackerClasses = [NSMutableArray array];
-    for (unsigned int i = 0; i < classCount; i++) {
-        NSString *clsName = NSStringFromClass(classes[i]);
-        if ([clsName containsString:@"Track"] ||
-            [clsName containsString:@"AppLog"] ||
-            [clsName containsString:@"BDAuto"]) {
-            [trackerClasses addObject:clsName];
-        }
-    }
-    free(classes);
-
-    for (NSString *name in [trackerClasses sortedArrayUsingSelector:@selector(compare:)]) {
-        Class cls = NSClassFromString(name);
-        if (class_getClassMethod(cls, @selector(eventV3:params:))) {
-            [result appendFormat:@"+eventV3: %@\n", name];
-        }
-        if (class_getClassMethod(cls, @selector(event:params:))) {
-            [result appendFormat:@"+event: %@\n", name];
-        }
-    }
-
-    return result;
-}
 
 @interface DYGhostSettingsPresenter : NSObject
 + (void)showSettingsFrom:(UIViewController *)presenter;
@@ -208,14 +195,15 @@ static NSString *DYGhostScanResult(void) {
                                                           style:UIAlertActionStyleDefault
                                                         handler:^(UIAlertAction *action) {
         _dyGhostAlertShowing = NO;
-        NSString *scanResult = DYGhostScanResult();
-        UIViewController *vc = presenter;
-        while (vc.presentedViewController) vc = vc.presentedViewController;
-        UIAlertController *diagAlert = [UIAlertController alertControllerWithTitle:@"Class Scan Results"
-                                                                           message:scanResult
-                                                                    preferredStyle:UIAlertControllerStyleAlert];
-        [diagAlert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
-        [vc presentViewController:diagAlert animated:YES completion:nil];
+        NSMutableString *result = [NSMutableString string];
+        NSArray *names = @[@"BDTrackerProtocol",@"BDTrackerIMPL",@"TTTracker",@"TTTrackerIMPL",@"BDTGTrackerKit",@"IESLCTrackerService",@"BDECIMTracker",@"BDPlatformSDKTracker",@"HTSLiveUser",@"AWEUserModel",@"Tracker",@"IESLiveUserModel"];
+        for (NSString *n in names) {
+            [result appendFormat:@"%@: %@\n", n, NSClassFromString(n)?@"FOUND":@"MISSING"];
+        }
+        UIViewController *vc = presenter; while(vc.presentedViewController) vc=vc.presentedViewController;
+        UIAlertController *d=[UIAlertController alertControllerWithTitle:@"Class Scan Results" message:result preferredStyle:UIAlertControllerStyleAlert];
+        [d addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+        [vc presentViewController:d animated:YES completion:nil];
     }];
 
     UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"Cancel"
@@ -238,23 +226,17 @@ static NSString *DYGhostScanResult(void) {
 
 - (instancetype)initWithFrame:(CGRect)frame {
     UIWindow *window = %orig;
-    if (window) {
-        [[UIApplication sharedApplication] setApplicationSupportsShakeToEdit:YES];
-    }
+    if (window) [[UIApplication sharedApplication] setApplicationSupportsShakeToEdit:YES];
     return window;
 }
 
-- (BOOL)canBecomeFirstResponder {
-    return YES;
-}
+- (BOOL)canBecomeFirstResponder { return YES; }
 
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
     %orig;
     if (motion == UIEventSubtypeMotionShake) {
         UIViewController *rootVC = self.rootViewController;
-        while (rootVC.presentedViewController) {
-            rootVC = rootVC.presentedViewController;
-        }
+        while (rootVC.presentedViewController) rootVC = rootVC.presentedViewController;
         [DYGhostSettingsPresenter showSettingsFrom:rootVC];
     }
 }
@@ -263,11 +245,9 @@ static NSString *DYGhostScanResult(void) {
 
 %ctor {
     NSLog(@"[DouyinGhostMode] Plugin loaded");
-    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYLiveGhostMode"]) {
+    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYLiveGhostMode"])
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"DYYYLiveGhostMode"];
-    }
-    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYGhostMode"]) {
+    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYGhostMode"])
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"DYYYGhostMode"];
-    }
     [[NSUserDefaults standardUserDefaults] synchronize];
 }

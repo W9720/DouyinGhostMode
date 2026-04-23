@@ -121,10 +121,54 @@
 %end
 
 // ==========================================
-// Shake Gesture Settings
+// Shake Gesture Settings + Diagnostics
 // ==========================================
 
 static BOOL _dyGhostAlertShowing = NO;
+
+static NSString *DYGhostScanResult(void) {
+    NSMutableString *result = [NSMutableString string];
+
+    NSArray *knownClasses = @[
+        @"BDTrackerProtocol",
+        @"Tracker",
+        @"HTSLiveUser",
+        @"IESLiveUserModel",
+        @"AWEUserModel"
+    ];
+
+    [result appendString:@"== Known Classes ==\n"];
+    for (NSString *name in knownClasses) {
+        Class cls = NSClassFromString(name);
+        [result appendFormat:@"%@: %@\n", name, cls ? @"FOUND" : @"MISSING"];
+    }
+
+    [result appendString:@"\n== Tracker Classes with event methods ==\n"];
+    unsigned int classCount = 0;
+    Class *classes = objc_copyClassList(&classCount);
+    NSMutableArray *trackerClasses = [NSMutableArray array];
+    for (unsigned int i = 0; i < classCount; i++) {
+        NSString *clsName = NSStringFromClass(classes[i]);
+        if ([clsName containsString:@"Track"] ||
+            [clsName containsString:@"AppLog"] ||
+            [clsName containsString:@"BDAuto"]) {
+            [trackerClasses addObject:clsName];
+        }
+    }
+    free(classes);
+
+    for (NSString *name in [trackerClasses sortedArrayUsingSelector:@selector(compare:)]) {
+        Class cls = NSClassFromString(name);
+        if (class_getClassMethod(cls, @selector(eventV3:params:))) {
+            [result appendFormat:@"+eventV3: %@\n", name];
+        }
+        if (class_getClassMethod(cls, @selector(event:params:))) {
+            [result appendFormat:@"+event: %@\n", name];
+        }
+    }
+
+    return result;
+}
 
 @interface DYGhostSettingsPresenter : NSObject
 + (void)showSettingsFrom:(UIViewController *)presenter;
@@ -160,6 +204,20 @@ static BOOL _dyGhostAlertShowing = NO;
         _dyGhostAlertShowing = NO;
     }];
 
+    UIAlertAction *diagAction = [UIAlertAction actionWithTitle:@"Scan Classes (Diag)"
+                                                          style:UIAlertActionStyleDefault
+                                                        handler:^(UIAlertAction *action) {
+        _dyGhostAlertShowing = NO;
+        NSString *scanResult = DYGhostScanResult();
+        UIViewController *vc = presenter;
+        while (vc.presentedViewController) vc = vc.presentedViewController;
+        UIAlertController *diagAlert = [UIAlertController alertControllerWithTitle:@"Class Scan Results"
+                                                                           message:scanResult
+                                                                    preferredStyle:UIAlertControllerStyleAlert];
+        [diagAlert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+        [vc presentViewController:diagAlert animated:YES completion:nil];
+    }];
+
     UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"Cancel"
                                                            style:UIAlertActionStyleCancel
                                                          handler:^(UIAlertAction *action) {
@@ -168,6 +226,7 @@ static BOOL _dyGhostAlertShowing = NO;
 
     [alert addAction:liveAction];
     [alert addAction:browseAction];
+    [alert addAction:diagAction];
     [alert addAction:cancelAction];
 
     [presenter presentViewController:alert animated:YES completion:nil];

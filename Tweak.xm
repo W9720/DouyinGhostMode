@@ -40,7 +40,6 @@ static BOOL DYIsNoiseURL(NSString *s) {
 }
 
 static int _dyViewScanCount = 0;
-static BOOL _dyViewScanning = NO;
 static NSSet *_dyLiveKeywords = nil;
 
 #pragma mark - Live Ghost: data layer

@@ -156,7 +156,7 @@ static BOOL DYShouldHideView(NSString *clsName) {
     if (text && DYGhostGetBool(kGhostLiveModeKey)) {
         NSString *cls = NSStringFromClass([self class]);
         if (DYShouldHideView(cls)) {
-            DYGhostLog([NSString stringWithFormat(@"HIDE-LABEL-TEXT %@ '%@'", cls, text));
+            DYGhostLog([NSString stringWithFormat:@"HIDE-LABEL-TEXT %@ '%@'", cls, text]);
             self.hidden = YES; self.alpha = 0;
         }
     }
@@ -204,7 +204,7 @@ static BOOL DYShouldHideView(NSString *clsName) {
 }
 - (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url completionHandler:(id)handler {
     if (url && DYGhostGetBool(kGhostBrowseModeKey) && !DYIsNoiseURL(url.absoluteString))
-        DYGhostLog(@"SESS-URL %@", url.absoluteString);
+        DYGhostLog([NSString stringWithFormat:@"SESS-URL %@", url.absoluteString]);
     return %orig;
 }
 %end

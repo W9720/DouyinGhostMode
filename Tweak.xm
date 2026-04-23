@@ -34,7 +34,7 @@ static IMP DYGhostInstallCaptureHook(Class cls, Method m) {
     NSUInteger argCount = method_getNumberOfArguments(m);
 
     char *retType = method_copyReturnType(m);
-    BOOL returnsObject = (retType[0] == '@' || retType[0] == 'B' || retType[0] == 'i' || retType[0] == 'q');
+    /* check return type */
     free(retType);
 
     // Only hook methods that take reasonable number of args (2-10)
@@ -139,7 +139,7 @@ static void DYGhostInstallCaptureHooks(void) {
             if (isVoid) continue;
 
             // Only hook instance methods for user model, both for trackers
-            BOOL isClassMethod = (method_getTypeEncoding(methods[i])[0] == '+');
+            /* skip */
 
             IMP orig = DYGhostInstallCaptureHook(cls, methods[i]);
             if (orig) hooked++;

@@ -39,17 +39,17 @@ static BOOL DYIsTrackingURL(NSString *s) {
 %hook HTSLiveUser
 - (BOOL)secret {
     BOOL r = %orig;
-    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog(@"LIVE: secret->YES (was %d)", (int)r); return YES; }
+    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog([NSString stringWithFormat:@"LIVE: secret->YES (was %d)", (int)r]); return YES; }
     return r;
 }
 - (BOOL)isSecret {
     BOOL r = %orig;
-    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog(@"LIVE: isSecret->YES (was %d)", (int)r); return YES; }
+    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog([NSString stringWithFormat:@"LIVE: isSecret->YES (was %d)", (int)r]); return YES; }
     return r;
 }
 - (BOOL)displayEntranceEffect {
     BOOL r = %orig;
-    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog(@"LIVE: entrance->NO (was %d)", (int)r); return NO; }
+    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog([NSString stringWithFormat:@"LIVE: entrance->NO (was %d)", (int)r]); return NO; }
     return r;
 }
 %end
@@ -57,14 +57,10 @@ static BOOL DYIsTrackingURL(NSString *s) {
 %hook AWEUserModel
 - (BOOL)isSecret {
     BOOL r = %orig;
-    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog(@"LIVE: AWE.isSecret->YES (was %d)", (int)r); return YES; }
+    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog([NSString stringWithFormat:@"LIVE: AWE.isSecret->YES (was %d)", (int)r]); return YES; }
     return r;
 }
 %end
-
-#pragma mark - Browse Ghost: Layer 1 - CFNetwork diagnostic
-
-static void (*orig_CFNetFunc)(void) = NULL;
 
 #pragma mark - Browse Ghost: Layer 2 - NSURLRequest
 
@@ -88,7 +84,10 @@ static void (*orig_CFNetFunc)(void) = NULL;
         NSString *s = self.URL.absoluteString;
         if (DYIsDouyinURL(s) && body.length > 0 && body.length < 1000) {
             NSString *bs = [[NSString alloc] initWithData:body encoding:NSUTF8StringEncoding];
-            if (bs) DYGhostLog([NSString stringWithFormat:@"BODY [%@] %@", [s componentsSeparatedBy:@"/"].lastObject, bs]);
+            if (bs) {
+                NSArray *parts = [s componentsSeparatedByString:@"/"];
+                DYGhostLog([NSString stringWithFormat:@"BODY [%@] %@", parts.lastObject, bs]);
+            }
         }
     }
 }
@@ -161,7 +160,20 @@ static void (*orig_CFNetFunc)(void) = NULL;
         if (DYIsDouyinURL(s)) {
             if (DYIsTrackingURL(s)) {
                 DYGhostLog([NSString stringWithFormat:@"BLK [ConAsync] %@", s]);
-                if (handler)((void(*)(id,id,id,id))handler)(nil,nil,[NSError errorWithDomain:@"DYGhost" code:-1 userInfo:nil]);
+                NSError *fakeErr = [NSError errorWithDomain:@"DYGhost" code:-1 userInfo:nil];
+                SEL sel = NSSelectorFromString(@"completionHandler:");
+                if ([handler respondsToSelector:sel]) {
+                    NSMethodSignature *sig = [handler methodSignatureForSelector:sel];
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    [inv setSelector:sel];
+                    [inv setTarget:handler];
+                    NSData *nilData = nil;
+                    NSURLResponse *nilResp = nil;
+                    [inv setArgument:&nilData atIndex:2];
+                    [inv setArgument:&nilResp atIndex:3];
+                    [inv setArgument:&fakeErr atIndex:4];
+                    [inv invoke];
+                }
                 return;
             }
             DYGhostLog([NSString stringWithFormat:@"SEE [ConAsync] %@", s]);
@@ -171,7 +183,7 @@ static void (*orig_CFNetFunc)(void) = NULL;
 }
 %end
 
-#pragma mark - Browse Ghost: Layer 5 - Tracker event methods (all known signatures)
+#pragma mark - Browse Ghost: Layer 5 - Tracker event methods
 
 %hook BDTrackerProtocol
 + (id)event:(id)a category:(id)b label:(id)c value:(id)d extValue:(id)e eventType:(id)f {
@@ -267,16 +279,15 @@ static BOOL _showing = NO;
         int cf=0,rq=0,se=0,cn=0,ev=0,lv=0,blk=0;
         for(NSString *l in _dyLog){
             if([l hasPrefix:@"BLK"]) blk++;
-            else if([l containsString:@"[CFNet]"]) cf++;
-            else if([l containsString:@"[Req]")) rq++;
-            else if([l containsString:@"[Sess]")) se++;
-            else if([l containsString:@"[Con]")) cn++;
+            else if([l rangeOfString:@"[Req]"].location!=NSNotFound) rq++;
+            else if([l rangeOfString:@"[Sess]"].location!=NSNotFound) se++;
+            else if([l rangeOfString:@"[Con]"].location!=NSNotFound) cn++;
             else if([l hasPrefix:@"EVT"]) ev++;
             else if([l hasPrefix:@"LIVE"]) lv++;
         }
         NSMutableString *ms=[NSMutableString string];
         [ms appendFormat:@"CFNetwork: %d\nNSURLRequest: %d\nNSURLSession: %d\nNSURLConnection: %d\nTracker Events: %d\nLive Hooks: %d\nBlocked: %d\nTotal: %d",cf,rq,se,cn,ev,lv,blk,(int)_dyLog.count];
-        if(blk==0&&ev==0&&se==0)[ms appendString:@"\n\n>>> If all zeros, Douyin uses its own network stack (Cronet/TTNet) <<<"];
+        if(blk==0&&ev==0&&se==0)[ms appendString:@"\n\n>>> If all zeros, Douyin uses Cronet/TTNet <<<"];
         UIViewController *v=p;while(v.presentedViewController)v=v.presentedViewController;
         UIAlertController *sa=[UIAlertController alertControllerWithTitle:@"Stats" message:ms preferredStyle:UIAlertControllerStyleAlert];
         [sa addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
@@ -311,8 +322,9 @@ static BOOL _showing = NO;
 
     void *h=dlopen("/System/Library/Frameworks/CFNetwork.framework/CFNetwork",RTLD_NOW);
     if(h){
-        void *s=dlsym(h,"CFHTTPMessageCreateRequest");
-        if(s){ orig_CFNetFunc=s; DYGhostLog(@"CFNetwork: symbol FOUND");}
+        typedef CFHTTPMessageRef (*CFHTTPMsgCreateFn)(CFAllocatorRef,CFURLRef,CFStringRef,CFStringRef,CFDictionaryRef);
+        CFHTTPMsgCreateFn fn = (CFHTTPMsgCreateFn)dlsym(h,"CFHTTPMessageCreateRequest");
+        if(fn){ DYGhostLog(@"CFNetwork: symbol FOUND");}
         else{ DYGhostLog(@"CFNetwork: symbol NOT found");}
     }else{ DYGhostLog(@"CFNetwork: dlopen FAIL");}
 

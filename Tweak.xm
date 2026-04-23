@@ -11,199 +11,107 @@ static BOOL DYGhostGetBool(NSString *key) {
     return [[NSUserDefaults standardUserDefaults] boolForKey:key];
 }
 
-static NSMutableArray *_dyGhostLogBuffer = nil;
-static BOOL _dyCaptureMode = NO;
+static NSMutableArray *_dyLog = nil;
 
 static void DYGhostLog(NSString *msg) {
     NSLog(@"%@", msg);
-    if (!_dyGhostLogBuffer) _dyGhostLogBuffer = [NSMutableArray array];
-    [_dyGhostLogBuffer addObject:msg];
-    if (_dyGhostLogBuffer.count > 200) [_dyGhostLogBuffer removeObjectsInRange:NSMakeRange(0,50)];
+    if (!_dyLog) _dyLog = [NSMutableArray array];
+    [_dyLog addObject:msg];
+    if (_dyLog.count > 200) [_dyLog removeObjectsInRange:NSMakeRange(0,50)];
 }
 
 // ==========================================
-// PHASE 1: Capture Mode - log EVERYTHING
-// Hook all methods on all tracker/user classes
-// Find out what's REALLY being called
+// Live Ghost - proven to work
 // ==========================================
 
-// Generic hook function that logs any method call and forwards to original
-static IMP DYGhostInstallCaptureHook(Class cls, Method m) {
-    SEL sel = method_getName(m);
-    NSString *selName = NSStringFromSelector(sel);
-    NSUInteger argCount = method_getNumberOfArguments(m);
-
-    char *retType = method_copyReturnType(m);
-    /* check return type */
-    free(retType);
-
-    // Only hook methods that take reasonable number of args (2-10)
-    if (argCount < 2 || argCount > 12) return NULL;
-
-    // Create a dynamic implementation that logs and calls original
-    // Use block-based approach for simplicity
-    __block IMP origImp = NULL;
-    id block = ^(id selfObj, ...){
-        va_list args; va_start(args, selfObj);
-
-        NSMutableString *argStr = [NSMutableString string];
-        for (NSUInteger i = 2; i < argCount && i < 8; i++) {
-            const char *t = method_copyArgumentType(m, i);
-            if (strcmp(t, "@") == 0) {
-                id v = va_arg(args, id);
-                if ([v isKindOfClass:[NSString class]] && [(NSString *)v length] < 100) [argStr appendFormat:@" @\"%@\"", v];
-                else if (v) [argStr appendFormat:@" <%@>", NSStringFromClass([v class])];
-                else [argStr appendFormat:@" nil"];
-            } else if (strcmp(t, "B") == 0) { int v = va_arg(args, int); [argStr appendFormat:@" %d", v]; }
-            else if (strcmp(t, "i") == 0 || strcmp(t, "I") == 0) { int v = va_arg(args, int); [argStr appendFormat:@" %d", v]; }
-            else if (strcmp(t, ":") == 0) { SEL v = va_arg(args, SEL); [argStr appendFormat:@" %s", sel_getName(v)]; }
-            else { va_arg(args, void*); [argStr appendFormat:@" ?"]; }
-            free((void*)t);
-        }
-        va_end(args);
-
-        NSString *clsName = NSStringFromClass([selfObj class]);
-        DYGhostLog([NSString stringWithFormat:@"CAPTURE: [%@ %@]%@", clsName, selName, argStr]);
-
-        // Call original via forwarding
-        NSMethodSignature *sig = [selfObj methodSignatureForSelector:sel];
-        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-        [inv setTarget:selfObj]; [inv setSelector:sel];
-
-        va_list args2; va_start(args2, selfObj);
-        for (NSUInteger i = 2; i < argCount; i++) {
-            const char *t = [sig getArgumentTypeAtIndex:i];
-            if (strcmp(t, "@") == 0) { id v = va_arg(args2, id); [inv setArgument:&v atIndex:i]; }
-            else if (strcmp(t, "B") == 0) { int v = va_arg(args2, int); [inv setArgument:&v atIndex:i]; }
-            else if (strcmp(t, "i") == 0) { int v = va_arg(args2, int); [inv setArgument:&v atIndex:i]; }
-            else if (strcmp(t, "q") == 0) { long long v = va_arg(args2, long long); [inv setArgument:&v atIndex:i]; }
-            else if (strcmp(t, "d") == 0) { double v = va_arg(args2, double); [inv setArgument:&v atIndex:i]; }
-            else if (strcmp(t, "f") == 0) { float v = (float)va_arg(args2, double); [inv setArgument:&v atIndex:i]; }
-            else if (strcmp(t, ":") == 0) { SEL v = va_arg(args2, SEL); [inv setArgument:&v atIndex:i]; }
-            else { void *v = va_arg(args2, void*); [inv setArgument:&v atIndex:i]; }
-        }
-        va_end(args2);
-
-        [inv invoke];
-
-        id result = nil;
-        if (sig.methodReturnLength > 0) { [inv getReturnValue:&result]; }
-        return result;
-    };
-
-    IMP newImp = imp_implementationWithBlock(block);
-    origImp = method_setImplementation(m, newImp);
-    return origImp;
+%hook HTSLiveUser
+- (BOOL)secret {
+    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog(@"LIVE:secret->YES"); return YES; }
+    return %orig;
 }
+- (BOOL)isSecret {
+    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog(@"LIVE:isSecret->YES"); return YES; }
+    return %orig;
+}
+- (BOOL)displayEntranceEffect {
+    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog(@"LIVE:displayEntranceEffect->NO"); return NO; }
+    return %orig;
+}
+%end
 
-static void DYGhostInstallCaptureHooks(void) {
-    DYGhostLog(@"=== Installing CAPTURE hooks ===");
+%hook AWEUserModel
+- (BOOL)isSecret {
+    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog(@"LIVE:AWE.isSecret->YES"); return YES; }
+    return %orig;
+}
+%end
 
-    NSArray *targetClasses = @[
-        @"BDTrackerProtocol", @"TTTracker", @"BDTrackerIMPL",
-        @"TTTrackerIMPL", @"BDTGTrackerKit", @"IESLCTrackerService",
-        @"BDECIMTracker", @"BDPlatformSDKTracker",
-        @"HTSLiveUser", @"AWEUserModel"
-    ];
+// ==========================================
+// Browse Ghost - URL monitoring only (safe, no blocking yet)
+// ==========================================
 
-    int totalHooks = 0;
-    for (NSString *clsName in targetClasses) {
-        Class cls = NSClassFromString(clsName);
-        if (!cls) continue;
-
-        unsigned int mc = 0;
-        Method *methods = class_copyMethodList(cls, &mc);
-        if (!methods) continue;
-
-        int hooked = 0;
-        for (unsigned int i = 0; i < mc; i++) {
-            SEL sel = method_getName(methods[i]);
-            NSString *selName = NSStringFromSelector(sel);
-
-            // Skip common NSObject methods
-            if ([selName hasPrefix:@"init"] ||
-                [selName hasPrefix:@"."] ||
-                [selName isEqualToString:@"class"] ||
-                [selName isEqualToString:@"hash"] ||
-                [selName isEqualToString:@"isEqual:"] ||
-                [selName isEqualToString:@"description"] ||
-                [selName isEqualToString:@"debugDescription"] ||
-                [selName hasPrefix:@"alloc"] ||
-                [selName hasPrefix:@"retain"] ||
-                [selName hasPrefix:@"release"] ||
-                [selName hasPrefix:@"autorelease"]) continue;
-
-            // Skip void-returning methods (they can crash our generic handler)
-            char *rt = method_copyReturnType(methods[i]);
-            BOOL isVoid = (rt[0] == 'v'); free(rt);
-            if (isVoid) continue;
-
-            // Only hook instance methods for user model, both for trackers
-            /* skip */
-
-            IMP orig = DYGhostInstallCaptureHook(cls, methods[i]);
-            if (orig) hooked++;
-        }
-        free(methods);
-
-        if (hooked > 0) {
-            DYGhostLog([NSString stringWithFormat:@"Captured %d methods on %@", hooked, clsName]);
-            totalHooks += hooked;
+%hook NSURLSession
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)req completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
+    if (req.URL) {
+        NSString *host = req.URL.host ?: @"";
+        if ([host containsString:@"snssdk"] || [host containsString:@"zijieapi"] || [host containsString:@"bytedance"]) {
+            DYGhostLog([NSString stringWithFormat:@"URL: %@ %@", host, req.URL.path ?: @"/"]);
         }
     }
-
-    DYGhostLog([NSString stringWithFormat:@"=== CAPTURE complete: %d hooks installed ===", totalHooks]);
+    return %orig;
 }
+- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
+    if (url) {
+        NSString *host = url.host ?: @"";
+        if ([host containsString:@"snssdk"] || [host containsString:@"zijieapi"] || [host containsString:@"bytedance"]) {
+            DYGhostLog([NSString stringWithFormat:@"URL: %@ %@", host, url.path ?: @"/"]);
+        }
+    }
+    return %orig;
+}
+%end
 
 // ==========================================
-// Settings UI with Capture toggle
+// Settings
 // ==========================================
-static BOOL _dyAlertShowing = NO;
+static BOOL _showing = NO;
 
-@interface DYP : NSObject
-+ (void)showFrom:(UIViewController *)vc;
+@interface DYV : NSObject
++ (void)show:(UIViewController *)p;
 @end
 
-@implementation DYP
-+ (void)showFrom:(UIViewController *)p {
-    if (!p || _dyAlertShowing) return;
-    _dyAlertShowing = YES;
+@implementation DYV
++ (void)show:(UIViewController *)p {
+    if (!p || _showing) return;
+    _showing = YES;
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Ghost Mode" message:@"" preferredStyle:UIAlertControllerStyleAlert];
 
     NSString *lt = DYGhostGetBool(kGhostLiveModeKey) ? @"[ON] Live" : @"[OFF] Live";
     [a addAction:[UIAlertAction actionWithTitle:lt style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
         [[NSUserDefaults standardUserDefaults] setBool:!DYGhostGetBool(kGhostLiveModeKey) forKey:kGhostLiveModeKey];
-        [[NSUserDefaults standardUserDefaults] synchronize]; _dyAlertShowing = NO;
+        [[NSUserDefaults standardUserDefaults] synchronize]; _showing = NO;
     }]];
     NSString *bt = DYGhostGetBool(kGhostBrowseModeKey) ? @"[ON] Browse" : @"[OFF] Browse";
     [a addAction:[UIAlertAction actionWithTitle:bt style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
         [[NSUserDefaults standardUserDefaults] setBool:!DYGhostGetBool(kGhostBrowseModeKey) forKey:kGhostBrowseModeKey];
-        [[NSUserDefaults standardUserDefaults] synchronize]; _dyAlertShowing = NO;
+        [[NSUserDefaults standardUserDefaults] synchronize]; _showing = NO;
     }]];
-
-    NSString *ct = _dyCaptureMode ? @"[ON] Capture" : @"[OFF] Capture";
-    [a addAction:[UIAlertAction actionWithTitle:ct style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
-        _dyCaptureMode = !_dyCaptureMode;
-        if (_dyCaptureMode) { DYGhostInstallCaptureHooks(); }
-        _dyAlertShowing = NO;
+    [a addAction:[UIAlertAction actionWithTitle:@"Clear & Test" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
+        _dyLog = [NSMutableArray array];
+        DYGhostLog(@"Logs cleared. Now: enter live room OR visit profile.");
+        _showing = NO;
     }]];
-
-    [a addAction:[UIAlertAction actionWithTitle:@"Clear Logs" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
-        _dyGhostLogBuffer = [NSMutableArray array]; _dyAlertShowing = NO;
-    }]];
-
-    [a addAction:[UIAlertAction actionWithTitle:@"Logs" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
-        _dyAlertShowing = NO;
+    [a addAction:[UIAlertAction actionWithTitle:@"View Logs" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
+        _showing = NO;
         NSMutableString *t = [NSMutableString string];
-        if (_dyGhostLogBuffer && _dyGhostLogBuffer.count > 0)
-            for (NSString *l in [_dyGhostLogBuffer reverseObjectEnumerator]) [t appendFormat:@"%@\n", l];
-        else t.string = @"No logs.\nTurn ON Capture, then test.";
+        if (_dyLog && _dyLog.count > 0) for (NSString *l in [_dyLog reverseObjectEnumerator]) [t appendFormat:@"%@\n", l];
+        else t.string = @"No logs.\n1. Clear & Test\n2. Do action\n3. View Logs";
         UIViewController *v = p; while(v.presentedViewController) v=v.presentedViewController;
         UIAlertController *l = [UIAlertController alertControllerWithTitle:@"Logs" message:t preferredStyle:UIAlertControllerStyleAlert];
         [l addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
         [v presentViewController:l animated:YES completion:nil];
     }]];
-    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction *x){_dyAlertShowing=NO;}]];
+    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction *x){_showing=NO;}]];
     [p presentViewController:a animated:YES completion:nil];
 }
 @end
@@ -216,13 +124,13 @@ static BOOL _dyAlertShowing = NO;
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
     %orig; if (motion == UIEventSubtypeMotionShake) {
         UIViewController *r = self.rootViewController; while(r.presentedViewController) r=r.presentedViewController;
-        [DYP showFrom:r];
+        [DYV show:r];
     }
 }
 %end
 
 %ctor {
-    DYGhostLog(@"Plugin loaded!");
+    DYGhostLog(@"Loaded!");
     if (![[NSUserDefaults standardUserDefaults] objectForKey:kGhostLiveModeKey])
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kGhostLiveModeKey];
     if (![[NSUserDefaults standardUserDefaults] objectForKey:kGhostBrowseModeKey])

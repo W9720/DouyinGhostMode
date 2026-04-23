@@ -12,12 +12,15 @@ static NSString *const kGhostBrowseModeKey = @"DYYYGhostMode";
 static BOOL DYGhostGetBool(NSString *key) { return [[NSUserDefaults standardUserDefaults] boolForKey:key]; }
 
 static NSMutableArray *_dyLog = nil;
+static int _dyReqCounter = 0;
 
 static void DYGhostLog(NSString *msg) {
-    NSLog(@"[DYGhost] %@", msg);
+    _dyReqCounter++;
+    NSString *tagged = [NSString stringWithFormat:@"[%03d] %@", _dyReqCounter, msg];
+    NSLog(@"[DYGhost] %@", tagged);
     if (!_dyLog) _dyLog = [NSMutableArray array];
-    [_dyLog addObject:msg];
-    if (_dyLog.count > 600) [_dyLog removeObjectsInRange:NSMakeRange(0,200)];
+    [_dyLog addObject:tagged];
+    if (_dyLog.count > 800) [_dyLog removeObjectsInRange:NSMakeRange(0,200)];
 }
 
 static BOOL DYIsDouyinURL(NSString *s) {
@@ -27,46 +30,31 @@ static BOOL DYIsDouyinURL(NSString *s) {
     return NO;
 }
 
-static BOOL DYIsCDNOrImageURL(NSString *s) {
-    if (!s) return NO;
-    NSArray *cdn = @[@".png",@".jpg",@".jpeg",@".gif",@".webp",@".mp4",@".m3u8",
-                     @"cdn-tos",@"cdn.",@"/obj/",@"webcastcdn",@"byteimg",
-                     @".css",@".js",@"font.",@"icon."];
-    NSString *lower = [s lowercaseString];
-    for (NSString *x in cdn) { if ([lower containsString:x]) return YES; }
-    return NO;
-}
-
-static BOOL DYIsTrackingURL(NSString *s) {
-    if (!s) return NO;
-    NSString *lower = [s lowercaseString];
-    NSArray *track = @[
-        @"/private/",@"/log/",@"/mcs/",@"/collect/",@"/event/",
-        @"/behavior/",@"/monitor/",@"/analyze/",@"/track/",
-        @"/visit/",@"/enter_room",@"/setresult",@"/dispatch_",
-        @"/report/",@"/upload_",@"/data/",@"/api/v1/",
-        @"/service/",@"/gateway/"
-    ];
-    for (NSString *x in track) { if ([lower containsString:x]) return YES; }
-    return NO;
-}
-
-#pragma mark - Live Ghost
+#pragma mark - Live Ghost: data layer
 
 %hook HTSLiveUser
 - (BOOL)secret {
     BOOL r = %orig;
-    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog([NSString stringWithFormat:@"LIVE: secret->YES (was %d)", (int)r]); return YES; }
+    if (DYGhostGetBool(kGhostLiveModeKey)) {
+        DYGhostLog([NSString stringWithFormat:@"LIVE: secret->YES (was %d)", (int)r]);
+        return YES;
+    }
     return r;
 }
 - (BOOL)isSecret {
     BOOL r = %orig;
-    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog([NSString stringWithFormat:@"LIVE: isSecret->YES (was %d)", (int)r]); return YES; }
+    if (DYGhostGetBool(kGhostLiveModeKey)) {
+        DYGhostLog([NSString stringWithFormat:@"LIVE: isSecret->YES (was %d)", (int)r]);
+        return YES;
+    }
     return r;
 }
 - (BOOL)displayEntranceEffect {
     BOOL r = %orig;
-    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog([NSString stringWithFormat:@"LIVE: entrance->NO (was %d)", (int)r]); return NO; }
+    if (DYGhostGetBool(kGhostLiveModeKey)) {
+        DYGhostLog([NSString stringWithFormat:@"LIVE: entrance->NO (was %d)", (int)r]);
+        return NO;
+    }
     return r;
 }
 %end
@@ -74,130 +62,135 @@ static BOOL DYIsTrackingURL(NSString *s) {
 %hook AWEUserModel
 - (BOOL)isSecret {
     BOOL r = %orig;
-    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog([NSString stringWithFormat:@"LIVE: AWE.isSecret->YES (was %d)", (int)r]); return YES; }
+    if (DYGhostGetBool(kGhostLiveModeKey)) {
+        DYGhostLog([NSString stringWithFormat:@"LIVE: AWE.isSecret->YES (was %d)", (int)r]);
+        return YES;
+    }
     return r;
 }
 %end
 
-#pragma mark - Browse Ghost: NSMutableURLRequest (THE WORKING HOOK!)
+#pragma mark - Live Ghost: UI layer - hide entrance banner
+
+%hook UIView
+- (void)setHidden:(BOOL)hidden {
+    if (DYGhostGetBool(kGhostLiveModeKey) && !hidden) {
+        NSString *cls = NSStringFromClass([self class]);
+        if ([cls containsString:@"Entrance"] || [cls containsString:@"EnterRoom"] ||
+            [cls containsString:@"Welcome"] || [cls containsString:@"JoinRoom"] ||
+            [cls containsString:@"ComeIn"] || [cls containsString:@"UserEnter"]) {
+            DYGhostLog([NSString stringWithFormat:@"UI-HIDE: %@", cls]);
+            hidden = YES;
+        }
+    }
+    %orig;
+}
+- (void)setAlpha:(CGFloat)alpha {
+    if (DYGhostGetBool(kGhostLiveModeKey) && alpha > 0) {
+        NSString *cls = NSStringFromClass([self class]);
+        if ([cls containsString:@"Entrance"] || [cls containsString:@"EnterRoom"] ||
+            [cls containsString:@"Welcome"] || [cls containsString:@"JoinRoom"]) {
+            DYGhostLog([NSString stringWithFormat:@"UI-ALPHA0: %@", cls]);
+            alpha = 0;
+        }
+    }
+    %orig;
+}
+%end
+
+#pragma mark - Browse Ghost DIAGNOSTIC MODE: log ALL requests, block NONE
 
 %hook NSMutableURLRequest
 - (void)setURL:(NSURL *)url {
     if (url && DYGhostGetBool(kGhostBrowseModeKey)) {
         NSString *s = url.absoluteString;
         if (DYIsDouyinURL(s)) {
-            if (DYIsTrackingURL(s)) {
-                if (!DYIsCDNOrImageURL(s)) {
-                    DYGhostLog([NSString stringWithFormat:@"BLK [Req] %@", s]);
-                    return;
-                }
-            }
-            DYGhostLog([NSString stringWithFormat:@"SEE [Req] %@", s]);
+            NSString *method = self.HTTPMethod ?: @"GET";
+            DYGhostLog([NSString stringWithFormat:@"REQ [%@] %@", method, s]);
+        } else {
+            DYGhostLog([NSString stringWithFormat:@"EXT [%@] %@", self.HTTPMethod ?: @"GET", s]);
         }
     }
     %orig;
 }
 - (void)setHTTPBody:(NSData *)body {
     %orig;
-    if (body && DYGhostGetBool(kGhostBrowseModeKey) && self.URL) {
+    if (body && DYGhostGetBool(kGhostBrowseModeKey) && self.URL && DYIsDouyinURL(self.URL.absoluteString)) {
         NSString *s = self.URL.absoluteString;
-        if (DYIsDouyinURL(s) && !DYIsCDNOrImageURL(s) && body.length > 0 && body.length < 2000) {
+        if (body.length > 0 && body.length < 3000) {
             NSString *bs = [[NSString alloc] initWithData:body encoding:NSUTF8StringEncoding];
             if (!bs) bs = [[NSString alloc] initWithData:body encoding:NSASCIIStringEncoding];
-            if (bs && bs.length > 0) {
+            if (bs) {
                 NSArray *parts = [s componentsSeparatedByString:@"/"];
                 NSString *lastPath = parts.lastObject ?: @"";
-                if (lastPath.length > 60) lastPath = [lastPath substringToIndex:60];
-                NSString *bodyPreview = (bs.length > 120) ? [bs substringToIndex:120] : bs;
-                DYGhostLog([NSString stringWithFormat:@"BODY [%@] %@", lastPath, bodyPreview]);
+                if (lastPath.length > 50) lastPath = [lastPath substringToIndex:50];
+                NSString *preview = (bs.length > 150) ? [bs substringToIndex:150] : bs;
+                DYGhostLog([NSString stringWithFormat:@"BODY [%@] %@", lastPath, preview]);
             } else {
-                DYGhostLog([NSString stringWithFormat:@"BIN-BODY [%@] len=%d", s, (int)body.length]);
+                DYGhostLog([NSString stringWithFormat:@"BIN [%@] len=%d", s, (int)body.length]);
             }
+        } else if (body.length >= 3000) {
+            DYGhostLog([NSString stringWithFormat:@"BIG-BODY [%@] len=%d", s, (int)body.length]);
         }
     }
 }
-- (void)setValue:(id)value forHTTPHeaderField:(NSString *)field {
+- (void)setHTTPMethod:(NSString *)method {
     %orig;
-    if (value && DYGhostGetBool(kGhostBrowseModeKey) && self.URL) {
-        NSString *s = self.URL.absoluteString;
-        if (DYIsDouyinURL(s) && DYIsTrackingURL(s) && !DYIsCDNOrImageURL(s)) {
-            DYGhostLog([NSString stringWithFormat:@"HDR [%@] %@=%@", field, field, value]);
-        }
+    if (method && DYGhostGetBool(kGhostBrowseModeKey) && self.URL && DYIsDouyinURL(self.URL.absoluteString)) {
+        DYGhostLog([NSString stringWithFormat:@"METHOD %@ %@", method, self.URL.absoluteString]);
+    }
+}
+- (void)addValue:(id)value forHTTPHeaderField:(NSString *)field {
+    %orig;
+    if (value && field && DYGhostGetBool(kGhostBrowseModeKey) && self.URL && DYIsDouyinURL(self.URL.absoluteString)) {
+        DYGhostLog([NSString stringWithFormat:@"HDR %@: %@", field, value]);
     }
 }
 %end
 
-#pragma mark - Browse Ghost: NSURLSession (backup)
-
 %hook NSURLSession
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)req completionHandler:(id)handler {
     if (req.URL && DYGhostGetBool(kGhostBrowseModeKey)) {
-        NSString *s = req.URL.absoluteString;
-        if (DYIsDouyinURL(s) && DYIsTrackingURL(s) && !DYIsCDNOrImageURL(s)) {
-            DYGhostLog([NSString stringWithFormat:@"BLK [Sess] %@", s]);
-            return nil;
-        }
+        DYGhostLog([NSString stringWithFormat:@"SESS-REQ [%@] %@", req.HTTPMethod ?: @"GET", req.URL.absoluteString]);
     }
     return %orig;
 }
 - (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url completionHandler:(id)handler {
     if (url && DYGhostGetBool(kGhostBrowseModeKey)) {
-        NSString *s = url.absoluteString;
-        if (DYIsDouyinURL(s) && DYIsTrackingURL(s) && !DYIsCDNOrImageURL(s)) {
-            DYGhostLog([NSString stringWithFormat:@"BLK [SessU] %@", s]);
-            return nil;
-        }
+        DYGhostLog([NSString stringWithFormat:@"SESS-URL %@", url.absoluteString]);
+    }
+    return %orig;
+}
+- (NSURLSessionUploadTask *)uploadTaskWithRequest:(NSURLRequest *)req fromData:(NSData *)body completionHandler:(id)handler {
+    if (req.URL && DYGhostGetBool(kGhostBrowseModeKey)) {
+        DYGhostLog([NSString stringWithFormat:@"SESS-UP [%@] %@ len=%d", req.HTTPMethod ?: @"POST", req.URL.absoluteString, (int)body.length]);
     }
     return %orig;
 }
 %end
 
-#pragma mark - Browse Ghost: NSURLConnection legacy
-
 %hook NSURLConnection
 + (NSData *)sendSynchronousRequest:(NSURLRequest *)req returningResponse:(NSURLResponse **)resp error:(NSError **)err {
     if (req.URL && DYGhostGetBool(kGhostBrowseModeKey)) {
-        NSString *s = req.URL.absoluteString;
-        if (DYIsDouyinURL(s) && DYIsTrackingURL(s) && !DYIsCDNOrImageURL(s)) {
-            DYGhostLog([NSString stringWithFormat:@"BLK [ConSync] %@", s]);
-            if (err) *err = [NSError errorWithDomain:@"DYGhost" code:-1 userInfo:nil];
-            return nil;
-        }
+        DYGhostLog([NSString stringWithFormat:@"CON-SYNC [%@] %@", req.HTTPMethod ?: @"GET", req.URL.absoluteString]);
     }
     return %orig;
 }
 + (void)sendAsynchronousRequest:(NSURLRequest *)req queue:(NSOperationQueue *)q completionHandler:(id)handler {
     if (req.URL && DYGhostGetBool(kGhostBrowseModeKey)) {
-        NSString *s = req.URL.absoluteString;
-        if (DYIsDouyinURL(s) && DYIsTrackingURL(s) && !DYIsCDNOrImageURL(s)) {
-            DYGhostLog([NSString stringWithFormat:@"BLK [ConAsync] %@", s]);
-            NSError *fakeErr = [NSError errorWithDomain:@"DYGhost" code:-1 userInfo:nil];
-            SEL sel = NSSelectorFromString(@"completionHandler:");
-            if ([handler respondsToSelector:sel]) {
-                NSMethodSignature *sig = [handler methodSignatureForSelector:sel];
-                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                [inv setSelector:sel]; [inv setTarget:handler];
-                NSData *nilData = nil; NSURLResponse *nilResp = nil;
-                [inv setArgument:&nilData atIndex:2]; [inv setArgument:&nilResp atIndex:3];
-                [inv setArgument:&fakeErr atIndex:4]; [inv invoke];
-            }
-            return;
-        }
+        DYGhostLog([NSString stringWithFormat:@"CON-ASYNC [%@] %@", req.HTTPMethod ?: @"GET", req.URL.absoluteString]);
     }
     %orig;
 }
 %end
 
-#pragma mark - Browse Ghost: Tracker events (always log)
+#pragma mark - Tracker events (log only)
 
 %hook BDTrackerProtocol
 + (id)event:(id)a category:(id)b label:(id)c value:(id)d extValue:(id)e eventType:(id)f {
     NSString *lbl = ([c isKindOfClass:[NSString class]])?c:(@"");
     NSString *val = ([d isKindOfClass:[NSString class]])?d:(@"");
     DYGhostLog([NSString stringWithFormat:@"EVT [BDTP] lbl=%@ val=%@", lbl, val]);
-    if (DYGhostGetBool(kGhostBrowseModeKey) && ([lbl containsString:@"visit"]||[lbl containsString:@"enter"]||[lbl containsString:@"browse"]||[lbl containsString:@"profile"]||[lbl containsString:@"live"])) {
-        DYGhostLog([NSString stringWithFormat:@"BLK-EVT [BDTP] lbl=%@ val=%@", lbl, val]); return nil;
-    }
     return %orig;
 }
 %end
@@ -207,9 +200,6 @@ static BOOL DYIsTrackingURL(NSString *s) {
     NSString *lbl = ([c isKindOfClass:[NSString class]])?c:(@"");
     NSString *val = ([d isKindOfClass:[NSString class]])?d:(@"");
     DYGhostLog([NSString stringWithFormat:@"EVT [TT] lbl=%@ val=%@", lbl, val]);
-    if (DYGhostGetBool(kGhostBrowseModeKey) && ([lbl containsString:@"visit"]||[lbl containsString:@"enter"]||[lbl containsString:@"browse"]||[lbl containsString:@"profile"]||[lbl containsString:@"live"])) {
-        DYGhostLog([NSString stringWithFormat:@"BLK-EVT [TT] lbl=%@ val=%@", lbl, val]); return nil;
-    }
     return %orig;
 }
 %end
@@ -219,9 +209,6 @@ static BOOL DYIsTrackingURL(NSString *s) {
     NSString *lbl = ([c isKindOfClass:[NSString class]])?c:(@"");
     NSString *val = ([d isKindOfClass:[NSString class]])?d:(@"");
     DYGhostLog([NSString stringWithFormat:@"EVT [BDTG] lbl=%@ val=%@", lbl, val]);
-    if (DYGhostGetBool(kGhostBrowseModeKey) && ([lbl containsString:@"visit"]||[lbl containsString:@"enter"]||[lbl containsString:@"browse"]||[lbl containsString:@"profile"]||[lbl containsString:@"live"])) {
-        DYGhostLog([NSString stringWithFormat:@"BLK-EVT [BDTG] lbl=%@ val=%@", lbl, val]); return nil;
-    }
     return %orig;
 }
 %end
@@ -231,9 +218,6 @@ static BOOL DYIsTrackingURL(NSString *s) {
     NSString *lbl = ([c isKindOfClass:[NSString class]])?c:(@"");
     NSString *val = ([d isKindOfClass:[NSString class]])?d:(@"");
     DYGhostLog([NSString stringWithFormat:@"EVT [IESLC] lbl=%@ val=%@", lbl, val]);
-    if (DYGhostGetBool(kGhostBrowseModeKey) && ([lbl containsString:@"visit"]||[lbl containsString:@"enter"]||[lbl containsString:@"browse"]||[lbl containsString:@"profile"]||[lbl containsString:@"live"])) {
-        DYGhostLog([NSString stringWithFormat:@"BLK-EVT [IESLC] lbl=%@ val=%@", lbl, val]); return nil;
-    }
     return %orig;
 }
 %end
@@ -250,7 +234,7 @@ static BOOL _showing = NO;
 + (void)show:(UIViewController *)p {
     if (!p || _showing) return;
     _showing = YES;
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Ghost Mode v5" message:@"" preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Ghost Mode v6-DIAG" message:@"" preferredStyle:UIAlertControllerStyleAlert];
 
     NSString *lt = DYGhostGetBool(kGhostLiveModeKey)?@"[ON] Live Ghost":@"[OFF] Live Ghost";
     [a addAction:[UIAlertAction actionWithTitle:lt style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
@@ -258,44 +242,49 @@ static BOOL _showing = NO;
         [[NSUserDefaults standardUserDefaults] synchronize]; _showing=NO;
     }]];
 
-    NSString *bt = DYGhostGetBool(kGhostBrowseModeKey)?@"[ON] Browse Ghost":@"[OFF] Browse Ghost";
+    NSString *bt = DYGhostGetBool(kGhostBrowseModeKey)?@"[ON] Browse DIAG":@"[OFF] Browse DIAG";
     [a addAction:[UIAlertAction actionWithTitle:bt style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
         [[NSUserDefaults standardUserDefaults] setBool:!DYGhostGetBool(kGhostBrowseModeKey) forKey:kGhostBrowseModeKey];
         [[NSUserDefaults standardUserDefaults] synchronize]; _showing=NO;
     }]];
 
+    [a addAction:[UIAlertAction actionWithTitle:@"--- MARK ---" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
+        DYGhostLog(@">>>>>>>>>> MARK <<<<<<<<<<"); _showing=NO;
+    }]];
+
     [a addAction:[UIAlertAction actionWithTitle:@"Clear & Test" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
-        _dyLog=[NSMutableArray array]; DYGhostLog(@">>> Cleared. Test now <<<"); _showing=NO;
+        _dyLog=[NSMutableArray array]; _dyReqCounter=0; DYGhostLog(@">>> Cleared <<<"); _showing=NO;
     }]];
 
     [a addAction:[UIAlertAction actionWithTitle:@"View Logs" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
         _showing=NO;
         NSMutableString *t=[NSMutableString string];
         if(_dyLog.count>0) for(NSString *l in[_dyLog reverseObjectEnumerator])[t appendFormat:@"%@\n",l];
-        else t.string=@"No logs.\n1.Turn ON both switches\n2.Clear&Test\n3.Enter live room\n4.Visit profile\n5.View Logs";
+        else t.string=@"No logs.\n1.Turn ON both switches\n2.Clear&Test\n3.Click MARK\n4.Enter live room\n5.Click MARK\n6.Visit profile\n7.Click MARK\n8.View Logs";
         UIViewController *v=p;while(v.presentedViewController)v=v.presentedViewController;
         UIAlertController *la=[UIAlertController alertControllerWithTitle:@"Logs" message:t preferredStyle:UIAlertControllerStyleAlert];
         [la addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
         [v presentViewController:la animated:YES completion:nil];
     }]];
 
-    [a addAction:[UIAlertAction actionWithTitle:@"Network Stats" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
+    [a addAction:[UIAlertAction actionWithTitle:@"Stats" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
         _showing=NO;
-        int rq=0,se=0,cn=0,ev=0,lv=0,blk=0,body=0,hdr=0;
+        int req=0,sess=0,con=0,ev=0,live=0,body=0,hdr=0,ext=0,uihide=0,mark=0,other=0;
         for(NSString *l in _dyLog){
-            if([l hasPrefix:@"BLK"]) blk++;
-            else if([l rangeOfString:@"[Req]"].location!=NSNotFound) rq++;
-            else if([l rangeOfString:@"[Sess]"].location!=NSNotFound) se++;
-            else if([l rangeOfString:@"[Con]"].location!=NSNotFound) cn++;
+            if([l hasPrefix:@"BLK"]||[l hasPrefix:@"REQ "]||[l rangeOfString:@"] REQ"].location!=NSNotFound) req++;
+            else if([l hasPrefix:@"SESS"]) sess++;
+            else if([l hasPrefix:@"CON"]) con++;
             else if([l hasPrefix:@"EVT"]) ev++;
-            else if([l hasPrefix:@"LIVE"]) lv++;
-            else if([l hasPrefix:@"BODY"]) body++;
+            else if([l hasPrefix:@"LIVE"]) live++;
+            else if([l hasPrefix:@"BODY"]||[l hasPrefix:@"BIN"]||[l hasPrefix:@"BIG"]) body++;
             else if([l hasPrefix:@"HDR"]) hdr++;
+            else if([l hasPrefix:@"EXT"]) ext++;
+            else if([l hasPrefix:@"UI-HIDE"]||[l hasPrefix:@"UI-ALPHA"]) uihide++;
+            else if([l containsString:@"MARK"]) mark++;
+            else other++;
         }
         NSMutableString *ms=[NSMutableString string];
-        [ms appendFormat:@"NSURLRequest: %d\nNSURLSession: %d\nNSURLConnection: %d\nTracker Events: %d\nLive Hooks: %d\nBlocked: %d\nBodies: %d\nHeaders: %d\nTotal: %d",rq,se,cn,ev,lv,blk,body,hdr,(int)_dyLog.count];
-        if(blk>0)[ms appendString:@"\n\n>>> BLOCKING ACTIVE! <<<"];
-        else if(rq>0&&blk==0)[ms appendString:@"\n\n>>> URLs seen but not blocked <<<"];
+        [ms appendFormat:@"Requests: %d\nSession: %d\nConnection: %d\nEvents: %d\nLiveHooks: %d\nBodies: %d\nHeaders: %d\nExtURLs: %d\nUI-Hide: %d\nMarks: %d\nOther: %d\nTotal: %d",req,sess,con,ev,live,body,hdr,ext,uihide,mark,other,(int)_dyLog.count];
         UIViewController *v=p;while(v.presentedViewController)v=v.presentedViewController;
         UIAlertController *sa=[UIAlertController alertControllerWithTitle:@"Stats" message:ms preferredStyle:UIAlertControllerStyleAlert];
         [sa addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
@@ -326,14 +315,14 @@ static BOOL _showing = NO;
 #pragma mark - Constructor
 
 %ctor{
-    DYGhostLog(@"Loading v5...");
+    DYGhostLog(@"Loading v6-DIAG...");
 
     void *h=dlopen("/System/Library/Frameworks/CFNetwork.framework/CFNetwork",RTLD_NOW);
     if(h){
         typedef CFHTTPMessageRef (*CFHTTPMsgCreateFn)(CFAllocatorRef,CFURLRef,CFStringRef,CFStringRef,CFDictionaryRef);
         CFHTTPMsgCreateFn fn = (CFHTTPMsgCreateFn)dlsym(h,"CFHTTPMessageCreateRequest");
-        if(fn){ DYGhostLog(@"CFNetwork: symbol FOUND");}
-        else{ DYGhostLog(@"CFNetwork: symbol NOT found");}
+        if(fn){ DYGhostLog(@"CFNetwork: FOUND");}
+        else{ DYGhostLog(@"CFNetwork: NOT found");}
     }else{ DYGhostLog(@"CFNetwork: dlopen FAIL");}
 
     NSUserDefaults *u=[NSUserDefaults standardUserDefaults];

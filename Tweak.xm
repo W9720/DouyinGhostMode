@@ -3,7 +3,6 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
-#import <CoreFoundation/CoreFoundation.h>
 
 static NSString *const kGhostLiveModeKey = @"DYYYLiveGhostMode";
 static NSString *const kGhostBrowseModeKey = @"DYYYGhostMode";
@@ -13,126 +12,151 @@ static BOOL DYGhostGetBool(NSString *key) {
 }
 
 static NSMutableArray *_dyGhostLogBuffer = nil;
+static BOOL _dyCaptureMode = NO;
 
 static void DYGhostLog(NSString *msg) {
     NSLog(@"%@", msg);
     if (!_dyGhostLogBuffer) _dyGhostLogBuffer = [NSMutableArray array];
     [_dyGhostLogBuffer addObject:msg];
-    if (_dyGhostLogBuffer.count > 100) [_dyGhostLogBuffer removeObjectsInRange:NSMakeRange(0,20)];
+    if (_dyGhostLogBuffer.count > 200) [_dyGhostLogBuffer removeObjectsInRange:NSMakeRange(0,50)];
 }
 
 // ==========================================
-// Browse Ghost - CFNetwork level interception
-// This catches ALL HTTP traffic regardless of framework used
+// PHASE 1: Capture Mode - log EVERYTHING
+// Hook all methods on all tracker/user classes
+// Find out what's REALLY being called
 // ==========================================
 
-static BOOL DYGhostShouldBlockURLString(NSString *urlString) {
-    if (!urlString || !DYGhostGetBool(kGhostBrowseModeKey)) return NO;
-    NSArray *patterns = @[
-        @"log.snssdk.com", @"mcs.snssdk.com", @"is.snssdk.com",
-        @"mon.snssdk.com", @"perf.snssdk.com", @"crash.snssdk.com",
-        @"mcs.zijieapi.com", @"log.zijieapi.com", @"is.zijieapi.com"
+// Generic hook function that logs any method call and forwards to original
+static IMP DYGhostInstallCaptureHook(Class cls, Method m) {
+    SEL sel = method_getName(m);
+    NSString *selName = NSStringFromSelector(sel);
+    NSUInteger argCount = method_getNumberOfArguments(m);
+
+    char *retType = method_copyReturnType(m);
+    BOOL returnsObject = (retType[0] == '@' || retType[0] == 'B' || retType[0] == 'i' || retType[0] == 'q');
+    free(retType);
+
+    // Only hook methods that take reasonable number of args (2-10)
+    if (argCount < 2 || argCount > 12) return NULL;
+
+    // Create a dynamic implementation that logs and calls original
+    // Use block-based approach for simplicity
+    __block IMP origImp = NULL;
+    id block = ^(id selfObj, ...){
+        va_list args; va_start(args, selfObj);
+
+        NSMutableString *argStr = [NSMutableString string];
+        for (NSUInteger i = 2; i < argCount && i < 8; i++) {
+            const char *t = method_copyArgumentType(m, i);
+            if (strcmp(t, "@") == 0) {
+                id v = va_arg(args, id);
+                if ([v isKindOfClass:[NSString class]] && [(NSString *)v length] < 100) [argStr appendFormat:@" @\"%@\"", v];
+                else if (v) [argStr appendFormat:@" <%@>", NSStringFromClass([v class])];
+                else [argStr appendFormat:@" nil"];
+            } else if (strcmp(t, "B") == 0) { int v = va_arg(args, int); [argStr appendFormat:@" %d", v]; }
+            else if (strcmp(t, "i") == 0 || strcmp(t, "I") == 0) { int v = va_arg(args, int); [argStr appendFormat:@" %d", v]; }
+            else if (strcmp(t, ":") == 0) { SEL v = va_arg(args, SEL); [argStr appendFormat:@" %s", sel_getName(v)]; }
+            else { va_arg(args, void*); [argStr appendFormat:@" ?"]; }
+            free((void*)t);
+        }
+        va_end(args);
+
+        NSString *clsName = NSStringFromClass([selfObj class]);
+        DYGhostLog([NSString stringWithFormat:@"CAPTURE: [%@ %@]%@", clsName, selName, argStr]);
+
+        // Call original via forwarding
+        NSMethodSignature *sig = [selfObj methodSignatureForSelector:sel];
+        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+        [inv setTarget:selfObj]; [inv setSelector:sel];
+
+        va_list args2; va_start(args2, selfObj);
+        for (NSUInteger i = 2; i < argCount; i++) {
+            const char *t = [sig getArgumentTypeAtIndex:i];
+            if (strcmp(t, "@") == 0) { id v = va_arg(args2, id); [inv setArgument:&v atIndex:i]; }
+            else if (strcmp(t, "B") == 0) { int v = va_arg(args2, int); [inv setArgument:&v atIndex:i]; }
+            else if (strcmp(t, "i") == 0) { int v = va_arg(args2, int); [inv setArgument:&v atIndex:i]; }
+            else if (strcmp(t, "q") == 0) { long long v = va_arg(args2, long long); [inv setArgument:&v atIndex:i]; }
+            else if (strcmp(t, "d") == 0) { double v = va_arg(args2, double); [inv setArgument:&v atIndex:i]; }
+            else if (strcmp(t, "f") == 0) { float v = (float)va_arg(args2, double); [inv setArgument:&v atIndex:i]; }
+            else if (strcmp(t, ":") == 0) { SEL v = va_arg(args2, SEL); [inv setArgument:&v atIndex:i]; }
+            else { void *v = va_arg(args2, void*); [inv setArgument:&v atIndex:i]; }
+        }
+        va_end(args2);
+
+        [inv invoke];
+
+        id result = nil;
+        if (sig.methodReturnLength > 0) { [inv getReturnValue:&result]; }
+        return result;
+    };
+
+    IMP newImp = imp_implementationWithBlock(block);
+    origImp = method_setImplementation(m, newImp);
+    return origImp;
+}
+
+static void DYGhostInstallCaptureHooks(void) {
+    DYGhostLog(@"=== Installing CAPTURE hooks ===");
+
+    NSArray *targetClasses = @[
+        @"BDTrackerProtocol", @"TTTracker", @"BDTrackerIMPL",
+        @"TTTrackerIMPL", @"BDTGTrackerKit", @"IESLCTrackerService",
+        @"BDECIMTracker", @"BDPlatformSDKTracker",
+        @"HTSLiveUser", @"AWEUserModel"
     ];
-    for (NSString *p in patterns) { if ([urlString containsString:p]) return YES; }
-    return NO;
-}
 
-// Hook CFReadStreamCreateForHTTPRequest (CFNetwork) - lowest common denominator for HTTP
-static CFReadStreamRef (*orig_CFReadStreamCreateForHTTPRequest)(CFAllocatorRef alloc, CFHTTPMessageRef request);
-static CFReadStreamRef my_CFReadStreamCreateForHTTPRequest(CFAllocatorRef alloc, CFHTTPMessageRef request) {
-    if (request && DYGhostGetBool(kGhostBrowseModeKey)) {
-        CFURLRef url = CFHTTPMessageCopyRequestURL(request);
-        if (url) {
-            NSString *urlStr = (__bridge_transfer NSString *)CFURLGetString(url);
-            CFRelease(url);
-            if (DYGhostShouldBlockURLString(urlStr)) {
-                DYGhostLog([NSString stringWithFormat:@"BLOCKED CFNetwork: %@", urlStr]);
-                CFRelease(request);
-                return NULL;
-            }
+    int totalHooks = 0;
+    for (NSString *clsName in targetClasses) {
+        Class cls = NSClassFromString(clsName);
+        if (!cls) continue;
+
+        unsigned int mc = 0;
+        Method *methods = class_copyMethodList(cls, &mc);
+        if (!methods) continue;
+
+        int hooked = 0;
+        for (unsigned int i = 0; i < mc; i++) {
+            SEL sel = method_getName(methods[i]);
+            NSString *selName = NSStringFromSelector(sel);
+
+            // Skip common NSObject methods
+            if ([selName hasPrefix:@"init"] ||
+                [selName hasPrefix:@"."] ||
+                [selName isEqualToString:@"class"] ||
+                [selName isEqualToString:@"hash"] ||
+                [selName isEqualToString:@"isEqual:"] ||
+                [selName isEqualToString:@"description"] ||
+                [selName isEqualToString:@"debugDescription"] ||
+                [selName hasPrefix:@"alloc"] ||
+                [selName hasPrefix:@"retain"] ||
+                [selName hasPrefix:@"release"] ||
+                [selName hasPrefix:@"autorelease"]) continue;
+
+            // Skip void-returning methods (they can crash our generic handler)
+            char *rt = method_copyReturnType(methods[i]);
+            BOOL isVoid = (rt[0] == 'v'); free(rt);
+            if (isVoid) continue;
+
+            // Only hook instance methods for user model, both for trackers
+            BOOL isClassMethod = (method_getTypeEncoding(methods[i])[0] == '+');
+
+            IMP orig = DYGhostInstallCaptureHook(cls, methods[i]);
+            if (orig) hooked++;
+        }
+        free(methods);
+
+        if (hooked > 0) {
+            DYGhostLog([NSString stringWithFormat:@"Captured %d methods on %@", hooked, clsName]);
+            totalHooks += hooked;
         }
     }
-    return orig_CFReadStreamCreateForHTTPRequest(alloc, request);
+
+    DYGhostLog([NSString stringWithFormat:@"=== CAPTURE complete: %d hooks installed ===", totalHooks]);
 }
-
-// Also hook NSMutableURLRequest setURL to catch any URL construction
-%hook NSMutableURLRequest
-
-- (void)setURL:(NSURL *)url {
-    if (url && DYGhostShouldBlockURLString(url.absoluteString)) {
-        DYGhostLog([NSString stringWithFormat:@"BLOCKED NSMutableURLRequest URL: %@", url.absoluteString]);
-        return;
-    }
-    %orig;
-}
-
-%end
-
-// And hook NSURLSession as backup
-%hook NSURLSession
-
-- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)req completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
-    if (DYGhostShouldBlockURLString(req.URL.absoluteString)) {
-        DYGhostLog([NSString stringWithFormat:@"BLOCKED NSURLSession: %@", req.URL.absoluteString]);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (handler) handler(nil, nil, [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]);
-        });
-        return nil;
-    }
-    return %orig;
-}
-- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
-    if (DYGhostShouldBlockURLString(url.absoluteString)) {
-        DYGhostLog([NSString stringWithFormat:@"BLOCKED NSURLSession URL: %@", url.absoluteString]);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (handler) handler(nil, nil, [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]);
-        });
-        return nil;
-    }
-    return %orig;
-}
-%end
 
 // ==========================================
-// Live Ghost - comprehensive HTSLiveUser interception
-// Try to affect ALL possible ways the live room checks visibility
-// ==========================================
-
-%hook HTSLiveUser
-
-- (BOOL)secret { if (DYGhostGetBool(kGhostLiveModeKey)) return YES; return %orig; }
-- (BOOL)isSecret { if (DYGhostGetBool(kGhostLiveModeKey)) return YES; return %orig; }
-- (BOOL)displayEntranceEffect { if (DYGhostGetBool(kGhostLiveModeKey)) return NO; return %orig; }
-- (id)valueForKey:(NSString *)key {
-    id val = %orig;
-    if (DYGhostGetBool(kGhostLiveModeKey)) {
-        if ([key isEqualToString:@"secret"] || [key isEqualToString:@"isSecret"]) return @(YES);
-        if ([key isEqualToString:@"displayEntranceEffect"]) return @(NO);
-    }
-    return val;
-}
-- (id)valueForUndefinedKey:(NSString *)key {
-    if (DYGhostGetBool(kGhostLiveModeKey)) {
-        if ([key isEqualToString:@"secret"] || [key isEqualToString:@"isSecret"]) return @(YES);
-        if ([key isEqualToString:@"displayEntranceEffect"]) return @(NO);
-    }
-    return %orig;
-}
-- (NSDictionary<NSString *, id> *)dictionaryWithValuesForKeys:(NSArray<NSString *> *)keys {
-    NSDictionary *d = %orig;
-    if (!d || !DYGhostGetBool(kGhostLiveModeKey)) return d;
-    NSMutableDictionary *md = [d mutableCopy];
-    for (NSString *k in keys) {
-        if ([k isEqualToString:@"secret"] || [k isEqualToString:@"isSecret"]) md[k] = @(YES);
-        if ([k isEqualToString:@"displayEntranceEffect"]) md[k] = @(NO);
-    }
-    return [md copy];
-}
-
-%end
-
-// ==========================================
-// Settings UI
+// Settings UI with Capture toggle
 // ==========================================
 static BOOL _dyAlertShowing = NO;
 
@@ -145,6 +169,7 @@ static BOOL _dyAlertShowing = NO;
     if (!p || _dyAlertShowing) return;
     _dyAlertShowing = YES;
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Ghost Mode" message:@"" preferredStyle:UIAlertControllerStyleAlert];
+
     NSString *lt = DYGhostGetBool(kGhostLiveModeKey) ? @"[ON] Live" : @"[OFF] Live";
     [a addAction:[UIAlertAction actionWithTitle:lt style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
         [[NSUserDefaults standardUserDefaults] setBool:!DYGhostGetBool(kGhostLiveModeKey) forKey:kGhostLiveModeKey];
@@ -155,11 +180,24 @@ static BOOL _dyAlertShowing = NO;
         [[NSUserDefaults standardUserDefaults] setBool:!DYGhostGetBool(kGhostBrowseModeKey) forKey:kGhostBrowseModeKey];
         [[NSUserDefaults standardUserDefaults] synchronize]; _dyAlertShowing = NO;
     }]];
+
+    NSString *ct = _dyCaptureMode ? @"[ON] Capture" : @"[OFF] Capture";
+    [a addAction:[UIAlertAction actionWithTitle:ct style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
+        _dyCaptureMode = !_dyCaptureMode;
+        if (_dyCaptureMode) { DYGhostInstallCaptureHooks(); }
+        _dyAlertShowing = NO;
+    }]];
+
+    [a addAction:[UIAlertAction actionWithTitle:@"Clear Logs" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
+        _dyGhostLogBuffer = [NSMutableArray array]; _dyAlertShowing = NO;
+    }]];
+
     [a addAction:[UIAlertAction actionWithTitle:@"Logs" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
         _dyAlertShowing = NO;
         NSMutableString *t = [NSMutableString string];
-        if (_dyGhostLogBuffer && _dyGhostLogBuffer.count > 0) for (NSString *l in [_dyGhostLogBuffer reverseObjectEnumerator]) [t appendFormat:@"%@\n", l];
-        else t.string = @"No logs.";
+        if (_dyGhostLogBuffer && _dyGhostLogBuffer.count > 0)
+            for (NSString *l in [_dyGhostLogBuffer reverseObjectEnumerator]) [t appendFormat:@"%@\n", l];
+        else t.string = @"No logs.\nTurn ON Capture, then test.";
         UIViewController *v = p; while(v.presentedViewController) v=v.presentedViewController;
         UIAlertController *l = [UIAlertController alertControllerWithTitle:@"Logs" message:t preferredStyle:UIAlertControllerStyleAlert];
         [l addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
@@ -185,23 +223,6 @@ static BOOL _dyAlertShowing = NO;
 
 %ctor {
     DYGhostLog(@"Plugin loaded!");
-
-    // Install CFNetwork hook using dlsym/dlopen
-    void *cfnetwork = dlopen("/System/Library/Frameworks/CFNetwork.framework/CFNetwork", RTLD_NOW);
-    if (cfnetwork) {
-        void *sym = dlsym(cfnetwork, "CFReadStreamCreateForHTTPRequest");
-        if (sym) {
-            orig_CFReadStreamCreateForHTTPRequest = sym;
-            // Use MSHookFunction equivalent via runtime
-            Method m = class_getClassMethod(NSClassFromString(@"__NSCFType"), NSSelectorFromString(@"CFReadStreamCreateForHTTPRequest"));
-            if (!m) {
-                // Direct function pointer replacement
-                DYGhostLog(@"CFNetwork hook installed via dlsym");
-            }
-        }
-        DYGhostLog([NSString stringWithFormat:@"CFNetwork: %@ found", cfnetwork ? @"YES" : @"NO"]);
-    }
-
     if (![[NSUserDefaults standardUserDefaults] objectForKey:kGhostLiveModeKey])
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kGhostLiveModeKey];
     if (![[NSUserDefaults standardUserDefaults] objectForKey:kGhostBrowseModeKey])

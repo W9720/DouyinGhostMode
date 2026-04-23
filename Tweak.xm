@@ -156,7 +156,7 @@ static id dy_generic_event_hook(id self, SEL _cmd, ...) {
     va_list args2;
     va_start(args2, _cmd);
     for (NSUInteger i = 2; i < argCount; i++) {
-        const char *type = method_copyArgumentType(sig, i);
+        const char *type = [sig getArgumentTypeAtIndex:i];
         if (strcmp(type, "@") == 0) {
             id v = va_arg(args2, id);
             [inv setArgument:&v atIndex:i];
@@ -219,7 +219,7 @@ static void DYGhostInstallHooks(void) {
     for (NSString *name in trackerClasses) {
         Class tc = NSClassFromString(name);
         if (!tc) continue;
-        DYGostHookEventMethodsOnClass(tc);
+        DYGhostHookEventMethodsOnClass(tc);
     }
 
     DYGhostLog(@"[DouyinGhostMode] All hooks installed!");
@@ -244,7 +244,7 @@ static void DYGhostHookEventMethodsOnClass(Class cls) {
         if (!_hookedEventSels) _hookedEventSels = [NSMutableArray array];
         [_hookedEventSels addObject:selName];
 
-        IMP origImp = method_setImplementation(methods[i], (IMP)dy_generic_event_hook);
+        method_setImplementation(methods[i], (IMP)dy_generic_event_hook);
         DYGhostLog([NSString stringWithFormat:@"[DouyinGhostMode] HOOKED EVENT: +[%@ %@]", NSStringFromClass(cls), selName]);
     }
     free(methods);

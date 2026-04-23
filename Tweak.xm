@@ -44,24 +44,49 @@
 + (void)event:(NSString *)event params:(NSDictionary *)params;
 @end
 
+static BOOL DYGhostGetBool(NSString *key) {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:key];
+}
+
+static BOOL DYGhostShouldBlockEvent(NSString *event) {
+    if (!event || !DYGhostGetBool(@"DYYYGhostMode")) return NO;
+    NSArray *keywords = @[
+        @"enter_personal_detail",
+        @"profile_pv",
+        @"others_homepage",
+        @"visit_profile",
+        @"shoot_record_play"
+    ];
+    for (NSString *k in keywords) {
+        if ([event containsString:k]) return YES;
+    }
+    return NO;
+}
+
 // ==========================================
-// Live Ghost Mode
+// Live Ghost Mode WITH LOGGING
 // ==========================================
 
 %hook HTSLiveUser
 
 - (BOOL)secret {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return YES;
+    BOOL mode = DYGhostGetBool(@"DYYYLiveGhostMode");
+    NSLog(@"[DouyinGhostMode] HTSLiveUser.secret CALLED, mode=%d", mode);
+    if (mode) return YES;
     return %orig;
 }
 
 - (BOOL)isSecret {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return YES;
+    BOOL mode = DYGhostGetBool(@"DYYYLiveGhostMode");
+    NSLog(@"[DouyinGhostMode] HTSLiveUser.isSecret CALLED, mode=%d", mode);
+    if (mode) return YES;
     return %orig;
 }
 
 - (BOOL)displayEntranceEffect {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return NO;
+    BOOL mode = DYGhostGetBool(@"DYYYLiveGhostMode");
+    NSLog(@"[DouyinGhostMode] HTSLiveUser.displayEntranceEffect CALLED, mode=%d", mode);
+    if (mode) return NO;
     return %orig;
 }
 
@@ -70,92 +95,112 @@
 %hook AWEUserModel
 
 - (BOOL)isSecret {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return YES;
+    BOOL mode = DYGhostGetBool(@"DYYYLiveGhostMode");
+    NSLog(@"[DouyinGhostMode] AWEUserModel.isSecret CALLED, mode=%d", mode);
+    if (mode) return YES;
     return %orig;
 }
 
 %end
 
 // ==========================================
-// Browse Ghost Mode - ALL confirmed existing classes
+// Browse Ghost Mode WITH LOGGING
 // ==========================================
-
-static BOOL DYGhostShouldBlockEvent(NSString *event) {
-    if (!event || ![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYGhostMode"]) return NO;
-    NSArray *blockedEvents = @[
-        @"enter_personal_detail",
-        @"profile_pv",
-        @"others_homepage",
-        @"visit_profile",
-        @"shoot_record_play"
-    ];
-    for (NSString *keyword in blockedEvents) {
-        if ([event containsString:keyword]) return YES;
-    }
-    return NO;
-}
 
 %hook BDTrackerProtocol
 + (void)eventV3:(NSString *)event params:(NSDictionary *)params {
-    if (DYGhostShouldBlockEvent(event)) return;
+    NSLog(@"[DouyinGhostMode] BDTrackerProtocol.eventV3 CALLED: %@", event);
+    if (DYGhostShouldBlockEvent(event)) {
+        NSLog(@"[DouyinGhostMode] BLOCKED event: %@", event);
+        return;
+    }
     %orig;
 }
 %end
 
 %hook BDTrackerIMPL
 + (void)eventV3:(NSString *)event params:(NSDictionary *)params {
-    if (DYGhostShouldBlockEvent(event)) return;
+    NSLog(@"[DouyinGhostMode] BDTrackerIMPL.eventV3 CALLED: %@", event);
+    if (DYGhostShouldBlockEvent(event)) {
+        NSLog(@"[DouyinGhostMode] BLOCKED event: %@", event);
+        return;
+    }
     %orig;
 }
 %end
 
 %hook TTTracker
 + (void)eventV3:(NSString *)event params:(NSDictionary *)params {
-    if (DYGhostShouldBlockEvent(event)) return;
+    NSLog(@"[DouyinGhostMode] TTTracker.eventV3 CALLED: %@", event);
+    if (DYGhostShouldBlockEvent(event)) {
+        NSLog(@"[DouyinGhostMode] BLOCKED event: %@", event);
+        return;
+    }
     %orig;
 }
 %end
 
 %hook TTTrackerIMPL
 + (void)eventV3:(NSString *)event params:(NSDictionary *)params {
-    if (DYGhostShouldBlockEvent(event)) return;
+    NSLog(@"[DouyinGhostMode] TTTrackerIMPL.eventV3 CALLED: %@", event);
+    if (DYGhostShouldBlockEvent(event)) {
+        NSLog(@"[DouyinGhostMode] BLOCKED event: %@", event);
+        return;
+    }
     %orig;
 }
 %end
 
 %hook BDTGTrackerKit
 + (void)eventV3:(NSString *)event params:(NSDictionary *)params {
-    if (DYGhostShouldBlockEvent(event)) return;
+    NSLog(@"[DouyinGhostMode] BDTGTrackerKit.eventV3 CALLED: %@", event);
+    if (DYGhostShouldBlockEvent(event)) {
+        NSLog(@"[DouyinGhostMode] BLOCKED event: %@", event);
+        return;
+    }
     %orig;
 }
 %end
 
 %hook IESLCTrackerService
 + (void)event:(NSString *)event params:(NSDictionary *)params {
-    if (DYGhostShouldBlockEvent(event)) return;
+    NSLog(@"[DouyinGhostMode] IESLCTrackerService.event CALLED: %@", event);
+    if (DYGhostShouldBlockEvent(event)) {
+        NSLog(@"[DouyinGhostMode] BLOCKED event: %@", event);
+        return;
+    }
     %orig;
 }
 %end
 
 %hook BDECIMTracker
 + (void)event:(NSString *)event params:(NSDictionary *)params {
-    if (DYGhostShouldBlockEvent(event)) return;
+    NSLog(@"[DouyinGhostMode] BDECIMTracker.event CALLED: %@", event);
+    if (DYGhostShouldBlockEvent(event)) {
+        NSLog(@"[DouyinGhostMode] BLOCKED event: %@", event);
+        return;
+    }
     %orig;
 }
 %end
 
 %hook BDPlatformSDKTracker
 + (void)event:(NSString *)event params:(NSDictionary *)params {
-    if (DYGhostShouldBlockEvent(event)) return;
+    NSLog(@"[DouyinGhostMode] BDPlatformSDKTracker.event CALLED: %@", event);
+    if (DYGhostShouldBlockEvent(event)) {
+        NSLog(@"[DouyinGhostMode] BLOCKED event: %@", event);
+        return;
+    }
     %orig;
 }
 %end
 
 // ==========================================
-// Shake Gesture Settings + Diagnostics
+// Settings + Log Viewer
 // ==========================================
 
 static BOOL _dyGhostAlertShowing = NO;
+static NSMutableArray *_dyGhostLogBuffer = nil;
 
 @interface DYGhostSettingsPresenter : NSObject
 + (void)showSettingsFrom:(UIViewController *)presenter;
@@ -171,80 +216,93 @@ static BOOL _dyGhostAlertShowing = NO;
                                                                    message:@"Toggle features below"
                                                             preferredStyle:UIAlertControllerStyleAlert];
 
-    NSString *liveTitle = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"] ? @"[ON] Live Ghost Mode" : @"[OFF] Live Ghost Mode";
+    NSString *liveTitle = DYGhostGetBool(@"DYYYLiveGhostMode") ? @"[ON] Live Ghost" : @"[OFF] Live Ghost";
     UIAlertAction *liveAction = [UIAlertAction actionWithTitle:liveTitle
                                                          style:UIAlertActionStyleDefault
                                                        handler:^(UIAlertAction *action) {
-        BOOL newVal = ![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"];
-        [[NSUserDefaults standardUserDefaults] setBool:newVal forKey:@"DYYYLiveGhostMode"];
+        BOOL v = !DYGhostGetBool(@"DYYYLiveGhostMode");
+        [[NSUserDefaults standardUserDefaults] setBool:v forKey:@"DYYYLiveGhostMode"];
         [[NSUserDefaults standardUserDefaults] synchronize];
+        NSLog(@"[DouyinGhostMode] Live Ghost set to: %@", v ? @"ON" : @"OFF");
         _dyGhostAlertShowing = NO;
     }];
 
-    NSString *browseTitle = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYGhostMode"] ? @"[ON] Browse Ghost Mode" : @"[OFF] Browse Ghost Mode";
+    NSString *browseTitle = DYGhostGetBool(@"DYYYGhostMode") ? @"[ON] Browse Ghost" : @"[OFF] Browse Ghost";
     UIAlertAction *browseAction = [UIAlertAction actionWithTitle:browseTitle
                                                            style:UIAlertActionStyleDefault
                                                          handler:^(UIAlertAction *action) {
-        BOOL newVal = ![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYGhostMode"];
-        [[NSUserDefaults standardUserDefaults] setBool:newVal forKey:@"DYYYGhostMode"];
+        BOOL v = !DYGhostGetBool(@"DYYYGhostMode");
+        [[NSUserDefaults standardUserDefaults] setBool:v forKey:@"DYYYGhostMode"];
         [[NSUserDefaults standardUserDefaults] synchronize];
+        NSLog(@"[DouyinGhostMode] Browse Ghost set to: %@", v ? @"ON" : @"OFF");
         _dyGhostAlertShowing = NO;
     }];
 
-    UIAlertAction *diagAction = [UIAlertAction actionWithTitle:@"Scan Classes (Diag)"
-                                                          style:UIAlertActionStyleDefault
-                                                        handler:^(UIAlertAction *action) {
+    UIAlertAction *logAction = [UIAlertAction actionWithTitle:@"View Logs"
+                                                        style:UIAlertActionStyleDefault
+                                                      handler:^(UIAlertAction *action) {
         _dyGhostAlertShowing = NO;
-        NSMutableString *result = [NSMutableString string];
-        NSArray *names = @[@"BDTrackerProtocol",@"BDTrackerIMPL",@"TTTracker",@"TTTrackerIMPL",@"BDTGTrackerKit",@"IESLCTrackerService",@"BDECIMTracker",@"BDPlatformSDKTracker",@"HTSLiveUser",@"AWEUserModel",@"Tracker",@"IESLiveUserModel"];
-        for (NSString *n in names) {
-            [result appendFormat:@"%@: %@\n", n, NSClassFromString(n)?@"FOUND":@"MISSING"];
+        NSMutableString *logText = [NSMutableString string];
+        if (_dyGhostLogBuffer && _dyGhostLogBuffer.count > 0) {
+            for (NSString *line in [_dyGhostLogBuffer reverseObjectEnumerator]) {
+                [logText appendFormat:@"%@\n", line];
+            }
+            if (_dyGhostLogBuffer.count > 50) [logText appendString:@"...(truncated)\n"];
+        } else {
+            [logText appendString:@"No logs captured yet.\n\nTry:\n1. Open a live room (for live ghost)\n2. Visit someone profile (for browse ghost)\n3. Then check logs again."];
         }
         UIViewController *vc = presenter; while(vc.presentedViewController) vc=vc.presentedViewController;
-        UIAlertController *d=[UIAlertController alertControllerWithTitle:@"Class Scan Results" message:result preferredStyle:UIAlertControllerStyleAlert];
-        [d addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
-        [vc presentViewController:d animated:YES completion:nil];
+        UIAlertController *l=[UIAlertController alertControllerWithTitle:@"Hook Logs" message:logText preferredStyle:UIAlertControllerStyleAlert];
+        [l addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+        [vc presentViewController:l animated:YES completion:nil];
     }];
 
     UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"Cancel"
                                                            style:UIAlertActionStyleCancel
-                                                         handler:^(UIAlertAction *action) {
-        _dyGhostAlertShowing = NO;
-    }];
+                                                         handler:^(UIAlertAction *action) { _dyGhostAlertShowing = NO; }];
 
     [alert addAction:liveAction];
     [alert addAction:browseAction];
-    [alert addAction:diagAction];
+    [alert addAction:logAction];
     [alert addAction:cancelAction];
-
     [presenter presentViewController:alert animated:YES completion:nil];
 }
 
 @end
 
 %hook UIWindow
-
 - (instancetype)initWithFrame:(CGRect)frame {
-    UIWindow *window = %orig;
-    if (window) [[UIApplication sharedApplication] setApplicationSupportsShakeToEdit:YES];
-    return window;
+    UIWindow *w = %orig;
+    if (w) [[UIApplication sharedApplication] setApplicationSupportsShakeToEdit:YES];
+    return w;
 }
-
 - (BOOL)canBecomeFirstResponder { return YES; }
-
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
     %orig;
     if (motion == UIEventSubtypeMotionShake) {
         UIViewController *rootVC = self.rootViewController;
-        while (rootVC.presentedViewController) rootVC = rootVC.presentedViewController;
+        while(rootVC.presentedViewController) rootVC=rootVC.presentedViewController;
         [DYGhostSettingsPresenter showSettingsFrom:rootVC];
     }
 }
-
 %end
 
+// ==========================================
+// Log Capture
+// ==========================================
+
+static void DYGhostLog(NSString *fmt, ...) {
+    va_list args; va_start(args, fmt);
+    NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:args];
+    va_end(args);
+    if (!_dyGhostLogBuffer) _dyGhostLogBuffer = [NSMutableArray array];
+    [_dyGhostLogBuffer addObject:[NSString stringWithFormat:@"%@", msg]];
+    if (_dyGhostLogBuffer.count > 100) [_dyGhostLogBuffer removeObjectsInRange:NSMakeRange(0, 20)];
+    NSLog(@"%@", msg);
+}
+
 %ctor {
-    NSLog(@"[DouyinGhostMode] Plugin loaded");
+    DYGhostLog(@"[DouyinGhostMode] Plugin loaded!");
     if (![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYLiveGhostMode"])
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"DYYYLiveGhostMode"];
     if (![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYGhostMode"])

@@ -21,125 +21,100 @@ static void DYGhostLog(NSString *msg) {
 }
 
 // ==========================================
-// Live Ghost Mode
+// Browse Ghost Mode - URL-based blocking via NSURLSession
 // ==========================================
 
-static IMP _orig_hts_secret = NULL;
-static BOOL dy_hts_secret(id self, SEL _cmd) {
-    if (DYGhostGetBool(kGhostLiveModeKey)) return YES;
-    return ((BOOL(*)(id,SEL))_orig_hts_secret)(self,_cmd);
-}
+static BOOL DYGhostShouldBlockURL(NSURL *url) {
+    if (!url || !DYGhostGetBool(kGhostBrowseModeKey)) return NO;
+    NSString *urlString = url.absoluteString;
+    if (!urlString) return NO;
 
-// ==========================================
-// Browse Ghost Mode - typed hooks for common arg counts
-// ==========================================
+    NSArray *blockedHosts = @[
+        @"log.snssdk.com",
+        @"mcs.snssdk.com",
+        @"is.snssdk.com",
+        @"mon.snssdk.com",
+        @"perf.snssdk.com",
+        @"crash.snssdk.com",
+        @"mcs.zijieapi.com",
+        @"log.zijieapi.com",
+        @"is.zijieapi.com"
+    ];
 
-static NSArray *_blockedKeywords = nil;
-
-static BOOL DYGhostIsBlocked(NSString *s) {
-    if (!DYGhostGetBool(kGhostBrowseModeKey) || !s) return NO;
-    if (!_blockedKeywords) _blockedKeywords = @[@"enter_personal_detail",@"profile_pv",@"others_homepage",@"visit_profile",@"shoot_record_play"];
-    for (NSString *k in _blockedKeywords) { if ([s containsString:k]) return YES; }
+    for (NSString *h in blockedHosts) {
+        if ([urlString containsString:h]) return YES;
+    }
     return NO;
 }
 
-// 4 real args (total 6 with self+_cmd): event:a:b:c:
-static IMP _orig_e4 = NULL;
-static id dy_hook_e4(id self, SEL _cmd, id a, id b, id c, id d) {
-    NSString *info = ([b isKindOfClass:[NSString class]] ? b : ([c isKindOfClass:[NSString class]] ? c : @""));
-    if (DYGhostIsBlocked(info)) { DYGhostLog([NSString stringWithFormat:@"BLOCKED(e4): %@", info]); return nil; }
-    return ((id(*)(id,SEL,id,id,id,id))_orig_e4)(self,_cmd,a,b,c,d);
-}
+%hook NSURLSession
 
-// 5 real args (total 7 with self+_cmd): event:a:b:c:d:
-static IMP _orig_e5 = NULL;
-static id dy_hook_e5(id self, SEL _cmd, id a, id b, id c, id d, id e) {
-    NSString *info = ([c isKindOfClass:[NSString class]] ? c : ([d isKindOfClass:[NSString class]] ? d : @""));
-    if (DYGhostIsBlocked(info)) { DYGhostLog([NSString stringWithFormat:@"BLOCKED(e5): %@", info]); return nil; }
-    return ((id(*)(id,SEL,id,id,id,id,id))_orig_e5)(self,_cmd,a,b,c,d,e);
-}
-
-// 6 real args (total 8 with self+_cmd): event:a:b:c:d:e:
-static IMP _orig_e6 = NULL;
-static id dy_hook_e6(id self, SEL _cmd, id a, id b, id c, id d, id e, id f) {
-    NSString *info = ([c isKindOfClass:[NSString class]] ? c : ([d isKindOfClass:[NSString class]] ? d : @""));
-    if (DYGhostIsBlocked(info)) { DYGhostLog([NSString stringWithFormat:@"BLOCKED(e6): %@", info]); return nil; }
-    return ((id(*)(id,SEL,id,id,id,id,id,id))_orig_e6)(self,_cmd,a,b,c,d,e,f);
-}
-
-// 7 real args (total 9 with self+_cmd): event:a:b:c:d:e:f:
-static IMP _orig_e7 = NULL;
-static id dy_hook_e7(id self, SEL _cmd, id a, id b, id c, id d, id e, id f, id g) {
-    NSString *info = ([c isKindOfClass:[NSString class]] ? c : ([d isKindOfClass:[NSString class]] ? d : @""));
-    if (DYGhostIsBlocked(info)) { DYGhostLog([NSString stringWithFormat:@"BLOCKED(e7): %@", info]); return nil; }
-    return ((id(*)(id,SEL,id,id,id,id,id,id,id))_orig_e7)(self,_cmd,a,b,c,d,e,f,g);
-}
-
-// ==========================================
-// Install hooks - find REAL method signatures at runtime
-// ==========================================
-
-static void DYGhostInstallHooks(void) {
-    DYGhostLog(@"Installing hooks...");
-
-    // Live Ghost
-    Class htsCls = NSClassFromString(@"HTSLiveUser");
-    if (htsCls) {
-        Method m = class_getInstanceMethod(htsCls, @selector(secret));
-        if (m) { _orig_hts_secret = method_setImplementation(m, (IMP)dy_hts_secret); DYGhostLog(@"HOOKED: HTSLiveUser.secret"); }
-    }
-
-    // Browse Ghost - scan each tracker class for event methods
-    NSArray *trackerClasses = @[@"BDTrackerProtocol", @"TTTracker", @"BDTGTrackerKit",
-        @"IESLCTrackerService", @"BDTrackerIMPL", @"TTTrackerIMPL",
-        @"BDECIMTracker", @"BDPlatformSDKTracker"];
-
-    for (NSString *clsName in trackerClasses) {
-        Class tc = NSClassFromString(clsName);
-        if (!tc) continue;
-
-        unsigned int mc = 0;
-        Method *methods = class_copyMethodList(tc, &mc);
-        if (!methods) continue;
-
-        for (unsigned int i = 0; i < mc; i++) {
-            SEL sel = method_getName(methods[i]);
-            NSString *selName = NSStringFromSelector(sel);
-
-            // Only hook methods with "event" in name
-            if (![selName containsString:@"event"]) continue;
-
-            char *retType = method_copyReturnType(methods[i]);
-            BOOL isVoid = (retType[0] == 'v');
-            free(retType);
-            if (isVoid) continue; // skip void methods
-
-            NSUInteger argCount = method_getNumberOfArguments(methods[i]);
-            NSUInteger realArgs = argCount - 2; // minus self + _cmd
-
-            IMP newImp = NULL;
-            IMP *origSlot = NULL;
-            const char *tag = "";
-
-            // Select right hook function by arg count
-            if (realArgs == 4) { newImp = (IMP)dy_hook_e4; origSlot = &_orig_e4; tag = "e4"; }
-            else if (realArgs == 5) { newImp = (IMP)dy_hook_e5; origSlot = &_orig_e5; tag = "e5"; }
-            else if (realArgs == 6) { newImp = (IMP)dy_hook_e6; origSlot = &_orig_e6; tag = "e6"; }
-            else if (realArgs == 7) { newImp = (IMP)dy_hook_e7; origSlot = &_orig_e7; tag = "e7"; }
-            else {
-                DYGhostLog([NSString stringWithFormat:@"SKIP: [%@ %@] (%lu args) unsupported", clsName, selName, (unsigned long)realArgs]);
-                continue;
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request
+                              completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
+    if (DYGhostShouldBlockURL(request.URL)) {
+        DYGhostLog([NSString stringWithFormat:@"BLOCKED URL: %@", request.URL.absoluteString]);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (completionHandler) {
+                NSError *err = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:@{NSLocalizedDescriptionKey:@"Blocked by GhostMode"}];
+                completionHandler(nil, nil, err);
             }
-
-            IMP orig = method_setImplementation(methods[i], newImp);
-            if (origSlot && !*origSlot) *origSlot = orig; // save first one for each type
-            DYGhostLog([NSString stringWithFormat:@"HOOKED(%s): [%@ %@] %luargs", tag, clsName, selName, (unsigned long)realArgs]);
-        }
-        free(methods);
+        });
+        return [[NSURLSessionDataTask alloc] init];
     }
-
-    DYGhostLog(@"Done!");
+    return %orig;
 }
+
+- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url
+                           completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
+    if (DYGhostShouldBlockURL(url)) {
+        DYGhostLog([NSString stringWithFormat:@"BLOCKED URL: %@", url.absoluteString]);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (completionHandler) {
+                NSError *err = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:@{NSLocalizedDescriptionKey:@"Blocked by GhostMode"}];
+                completionHandler(nil, nil, err);
+            }
+        });
+        return [[NSURLSessionDataTask alloc] init];
+    }
+    return %orig;
+}
+
+%end
+
+// ==========================================
+// Live Ghost Mode - try all possible methods on HTSLiveUser
+// ==========================================
+
+%hook HTSLiveUser
+
+- (BOOL)secret {
+    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog(@"HIT: HTSLiveUser.secret -> YES"); return YES; }
+    return %orig;
+}
+
+- (BOOL)isSecret {
+    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog(@"HIT: HTSLiveUser.isSecret -> YES"); return YES; }
+    return %orig;
+}
+
+- (BOOL)displayEntranceEffect {
+    if (DYGhostGetBool(kGhostLiveModeKey)) { DYGhostLog(@"HIT: HTSLiveUser.displayEntranceEffect -> NO"); return NO; }
+    return %orig;
+}
+
+- (id)valueForUndefinedKey:(NSString *)key {
+    id val = %orig;
+    if ([key isEqualToString:@"secret"] || [key isEqualToString:@"isSecret"]) {
+        DYGhostLog([NSString stringWithFormat(@"HIT: HTSLiveUser KVO key=%@ val=%@", key, val]);
+        if (DYGhostGetBool(kGhostLiveModeKey)) return @(YES);
+    }
+    if ([key isEqualToString:@"displayEntranceEffect"]) {
+        if (DYGhostGetBool(kGhostLiveModeKey)) return @(NO);
+    }
+    return val;
+}
+
+%end
 
 // ==========================================
 // Settings UI
@@ -169,14 +144,14 @@ static BOOL _dyGhostAlertShowing = NO;
     UIAlertAction *browseAction = [UIAlertAction actionWithTitle:browseTitle style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
         [[NSUserDefaults standardUserDefaults] setBool:!DYGhostGetBool(kGhostBrowseModeKey) forKey:kGhostBrowseModeKey];
         [[NSUserDefaults standardUserDefaults] synchronize]; _dyGhostAlertShowing = NO;
-    }];
+    };
 
     UIAlertAction *logAction = [UIAlertAction actionWithTitle:@"View Logs" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
         _dyGhostAlertShowing = NO;
         NSMutableString *t = [NSMutableString string];
         if (_dyGhostLogBuffer && _dyGhostLogBuffer.count > 0) {
             for (NSString *line in [_dyGhostLogBuffer reverseObjectEnumerator]) [t appendFormat:@"%@\n", line];
-        } else { t.string = @"No logs yet."; }
+        } else { t.string = @"No logs.\nTurn ON modes then test."; }
         UIViewController *vc = presenter; while(vc.presentedViewController) vc=vc.presentedViewController;
         UIAlertController *l=[UIAlertController alertControllerWithTitle:@"Logs" message:t preferredStyle:UIAlertControllerStyleAlert];
         [l addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
@@ -209,8 +184,4 @@ static BOOL _dyGhostAlertShowing = NO;
     if (![[NSUserDefaults standardUserDefaults] objectForKey:kGhostBrowseModeKey])
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kGhostBrowseModeKey];
     [[NSUserDefaults standardUserDefaults] synchronize];
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        DYGhostInstallHooks();
-    });
 }

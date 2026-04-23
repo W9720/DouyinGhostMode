@@ -1,4 +1,4 @@
-# DouyinGhostMode - 抖音隐身模式插件
+# DouyinGhostMode
 
 TARGET := iphone:clang:latest:14.0
 ARCHS = arm64 arm64e
@@ -8,7 +8,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = DouyinGhostMode
 
 DouyinGhostMode_FILES = Tweak.xm
-DouyinGhostMode_CFLAGS = -fobjc-arc
+DouyinGhostMode_CFLAGS = -fobjc-arc -Wno-arc-performSelector-leaks
 DouyinGhostMode_FRAMEWORKS = UIKit Foundation
 
 include $(THEOS_MAKE_PATH)/tweak.mk

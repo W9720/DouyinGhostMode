@@ -133,7 +133,7 @@ static void DYGhostInstallHooks(void) {
 
             IMP orig = method_setImplementation(methods[i], newImp);
             if (origSlot && !*origSlot) *origSlot = orig; // save first one for each type
-            DYGhostLog([NSString stringWithFormat:@"HOOKED(%@): [%@ %@] %luargs", tag, clsName, selName, (unsigned long)realArgs]);
+            DYGhostLog([NSString stringWithFormat:@"HOOKED(%s): [%@ %@] %luargs", tag, clsName, selName, (unsigned long)realArgs]);
         }
         free(methods);
     }

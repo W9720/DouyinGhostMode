@@ -16,63 +16,20 @@ static void DYGhostSetBool(NSString *key, BOOL value) {
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
-#pragma mark - URL/Event Blocking Logic
+#pragma mark - Blocking Logic
 
-static BOOL DYGhostIsTrackingHost(NSString *host) {
-    if (!host) return NO;
-    NSArray *trackingHosts = @[
-        @"log.snssdk.com",
-        @"mcs.snssdk.com",
-        @"toblog.ctobsnssdk.com",
-        @"is.snssdk.com",
-        @"crash.snssdk.com",
-        @"mon.snssdk.com",
-        @"perf.snssdk.com",
-        @"mcs.zijieapi.com",
-        @"log.zijieapi.com",
-        @"is.zijieapi.com",
-        @"toblog.ctobsnssdk.com",
-        @"mcs.bytedance.com",
-        @"log.bytedance.com",
-        @"slardar.bytedance.com",
-        @"mcs.toutiao.com",
-        @"log.toutiao.com"
+static BOOL DYGhostIsVisitorAPI(NSString *urlString) {
+    if (!urlString || !DYGhostGetBool(kGhostBrowseModeKey)) return NO;
+    NSArray *blockedPatterns = @[
+        @"recent_visitor",
+        @"visit_history",
+        @"home/visit",
+        @"profile/visit",
+        @"visitor_list",
+        @"homepage_visitor"
     ];
-    for (NSString *trackingHost in trackingHosts) {
-        if ([host containsString:trackingHost]) return YES;
-    }
-    return NO;
-}
-
-static BOOL DYGhostIsBlockedAPIPath(NSString *path) {
-    if (!path) return NO;
-    NSArray *blockedPaths = @[
-        @"/user/recent_visitor",
-        @"/user/visit_history",
-        @"/home/visit",
-        @"/aweme/v1/user/recent_visitor",
-        @"/aweme/v1/visitor",
-        @"/aweme/v1/profile/visit"
-    ];
-    for (NSString *blockedPath in blockedPaths) {
-        if ([path containsString:blockedPath]) return YES;
-    }
-    return NO;
-}
-
-static BOOL DYGhostShouldBlockRequest(NSURLRequest *request) {
-    if (!request || !DYGhostGetBool(kGhostBrowseModeKey)) return NO;
-    NSURL *url = request.URL;
-    if (!url) return NO;
-    NSString *host = url.host;
-    NSString *path = url.path;
-    if (DYGhostIsTrackingHost(host)) {
-        NSLog(@"[DouyinGhostMode] Blocked tracking host: %@%@", host, path);
-        return YES;
-    }
-    if (DYGhostIsBlockedAPIPath(path)) {
-        NSLog(@"[DouyinGhostMode] Blocked visitor API: %@%@", host, path);
-        return YES;
+    for (NSString *pattern in blockedPatterns) {
+        if ([urlString containsString:pattern]) return YES;
     }
     return NO;
 }
@@ -117,7 +74,7 @@ static BOOL DYGhostShouldBlockEvent(NSString *event) {
 - (BOOL)isSecret { if (DYGhostGetBool(kGhostLiveModeKey)) return YES; return %orig; }
 %end
 
-#pragma mark - Layer 2: Tracker SDK Hooks (best effort)
+#pragma mark - Layer 2: Tracker SDK Hooks
 
 %hook BDTrackerProtocol
 + (void)eventV3:(NSString *)event params:(NSDictionary *)params {
@@ -139,12 +96,14 @@ static BOOL DYGhostShouldBlockEvent(NSString *event) {
 }
 %end
 
-#pragma mark - Layer 3: NSURLSession Network Interception (GUARANTEED)
+#pragma mark - Layer 3: Safe NSURLSession Interception (visitor API only)
 
 %hook NSURLSession
 
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
-    if (DYGhostShouldBlockRequest(request)) {
+    NSString *urlString = request.URL.absoluteString;
+    if (DYGhostIsVisitorAPI(urlString)) {
+        NSLog(@"[DouyinGhostMode] Blocked visitor API: %@", urlString);
         dispatch_async(dispatch_get_main_queue(), ^{
             if (completionHandler) {
                 NSError *error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil];
@@ -152,22 +111,6 @@ static BOOL DYGhostShouldBlockEvent(NSString *event) {
             }
         });
         return nil;
-    }
-    return %orig;
-}
-
-- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
-    if (url && DYGhostGetBool(kGhostBrowseModeKey)) {
-        if (DYGhostIsTrackingHost(url.host) || DYGhostIsBlockedAPIPath(url.path)) {
-            NSLog(@"[DouyinGhostMode] Blocked dataTaskWithURL: %@", url);
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (completionHandler) {
-                    NSError *error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil];
-                    completionHandler(nil, nil, error);
-                }
-            });
-            return nil;
-        }
     }
     return %orig;
 }
@@ -261,11 +204,8 @@ static void DYGhostLogRuntimeInfo(void) {
         @"HTSLiveUser",
         @"IESLiveUserModel",
         @"AWEUserModel",
-        @"SSNetworkService",
-        @"AWEServiceNetworkManager",
         @"BDAutoTrackService",
-        @"SSAppLog",
-        @"BytedanceTracer"
+        @"SSAppLog"
     ];
     NSLog(@"[DouyinGhostMode] === Runtime Class Check ===");
     for (NSString *cls in classesToCheck) {
@@ -277,7 +217,6 @@ static void DYGhostLogRuntimeInfo(void) {
 
 %ctor {
     NSLog(@"[DouyinGhostMode] Plugin loaded");
-
     if (![[NSUserDefaults standardUserDefaults] objectForKey:kGhostLiveModeKey]) {
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kGhostLiveModeKey];
     }
@@ -285,6 +224,5 @@ static void DYGhostLogRuntimeInfo(void) {
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kGhostBrowseModeKey];
     }
     [[NSUserDefaults standardUserDefaults] synchronize];
-
     DYGhostLogRuntimeInfo();
 }

@@ -59,7 +59,7 @@ static BOOL DYGhostShouldBlockURL(NSURL *url) {
                 completionHandler(nil, nil, err);
             }
         });
-        return [[NSURLSessionDataTask alloc] init];
+        return nil;
     }
     return %orig;
 }
@@ -74,7 +74,7 @@ static BOOL DYGhostShouldBlockURL(NSURL *url) {
                 completionHandler(nil, nil, err);
             }
         });
-        return [[NSURLSessionDataTask alloc] init];
+        return nil;
     }
     return %orig;
 }
@@ -105,7 +105,7 @@ static BOOL DYGhostShouldBlockURL(NSURL *url) {
 - (id)valueForUndefinedKey:(NSString *)key {
     id val = %orig;
     if ([key isEqualToString:@"secret"] || [key isEqualToString:@"isSecret"]) {
-        DYGhostLog([NSString stringWithFormat(@"HIT: HTSLiveUser KVO key=%@ val=%@", key, val]);
+        DYGhostLog([NSString stringWithFormat:@"HIT: HTSLiveUser KVO key=%@ val=%@", key, val]);
         if (DYGhostGetBool(kGhostLiveModeKey)) return @(YES);
     }
     if ([key isEqualToString:@"displayEntranceEffect"]) {

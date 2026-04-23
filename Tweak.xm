@@ -16,7 +16,54 @@ static void DYGhostSetBool(NSString *key, BOOL value) {
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
-#pragma mark - Live Ghost Mode
+static BOOL DYGhostShouldBlockEvent(NSString *event) {
+    if (!event || !DYGhostGetBool(kGhostBrowseModeKey)) return NO;
+    static NSArray *blockedEvents = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        blockedEvents = @[
+            @"enter_personal_detail",
+            @"profile_pv",
+            @"others_homepage",
+            @"visit_profile",
+            @"shoot_record_play",
+            @"personal_homepage",
+            @"user_profile",
+            @"homepage_visit",
+            @"browse_history",
+            @"view_history",
+            @"home_page_visit"
+        ];
+    });
+    return [blockedEvents containsObject:event];
+}
+
+static BOOL DYGhostShouldBlockURL(NSString *urlString) {
+    if (!urlString || !DYGhostGetBool(kGhostBrowseModeKey)) return NO;
+    static NSArray *blockedPatterns = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        blockedPatterns = @[
+            @"/user/profile/",
+            @"/aweme/v1/user/",
+            @"/user/detail/",
+            @"/aweme/v1/aweme/detail/",
+            @"/user/recent_visitor/",
+            @"/user/visit_history/",
+            @"/home/visit/",
+            @"visit_profile",
+            @"enter_personal_detail",
+            @"profile_pv",
+            @"homepage_visit"
+        ];
+    });
+    for (NSString *pattern in blockedPatterns) {
+        if ([urlString containsString:pattern]) return YES;
+    }
+    return NO;
+}
+
+#pragma mark - Layer 1: Live Ghost Mode
 
 %hook HTSLiveUser
 
@@ -65,22 +112,14 @@ static void DYGhostSetBool(NSString *key, BOOL value) {
 
 %end
 
-#pragma mark - Browse Ghost Mode
+#pragma mark - Layer 2: Tracker SDK Hooks
 
 %hook BDTrackerProtocol
 
 + (void)eventV3:(NSString *)event params:(NSDictionary *)params {
-    if (DYGhostGetBool(kGhostBrowseModeKey)) {
-        NSArray *blockedEvents = @[
-            @"enter_personal_detail",
-            @"profile_pv",
-            @"others_homepage",
-            @"visit_profile",
-            @"shoot_record_play"
-        ];
-        if ([blockedEvents containsObject:event]) {
-            return;
-        }
+    if (DYGhostShouldBlockEvent(event)) {
+        NSLog(@"[DouyinGhostMode] Blocked BDTracker eventV3: %@", event);
+        return;
     }
     %orig;
 }
@@ -90,18 +129,65 @@ static void DYGhostSetBool(NSString *key, BOOL value) {
 %hook Tracker
 
 + (void)event:(NSString *)event params:(NSDictionary *)params {
-    if (DYGhostGetBool(kGhostBrowseModeKey)) {
-        NSArray *blockedEvents = @[
-            @"enter_personal_detail",
-            @"profile_pv",
-            @"others_homepage",
-            @"visit_profile"
-        ];
-        if ([blockedEvents containsObject:event]) {
-            return;
-        }
+    if (DYGhostShouldBlockEvent(event)) {
+        NSLog(@"[DouyinGhostMode] Blocked Tracker event: %@", event);
+        return;
     }
     %orig;
+}
+
+%end
+
+#pragma mark - Layer 3: Network Request Interception
+
+%hook NSMutableURLRequest
+
+- (void)setURL:(NSURL *)url {
+    if (url && DYGhostShouldBlockURL(url.absoluteString)) {
+        NSLog(@"[DouyinGhostMode] Blocked request URL: %@", url.absoluteString);
+        return;
+    }
+    %orig;
+}
+
+%end
+
+#pragma mark - Layer 4: SSNetworkService Interception
+
+%hook SSNetworkService
+
+- (id)sendRequest:(id)request responseDelegate:(id)delegate requestId:(NSInteger)requestId {
+    if (DYGhostGetBool(kGhostBrowseModeKey)) {
+        SEL urlSel = NSSelectorFromString(@"url");
+        if ([request respondsToSelector:urlSel]) {
+            NSString *urlString = [request performSelector:urlSel];
+            if (DYGhostShouldBlockURL(urlString)) {
+                NSLog(@"[DouyinGhostMode] Blocked SSNetwork request: %@", urlString);
+                return nil;
+            }
+        }
+    }
+    return %orig;
+}
+
+%end
+
+#pragma mark - Layer 5: AWEService Interception
+
+%hook AWEServiceNetworkManager
+
+- (id)sendRequest:(id)request completion:(id)completion {
+    if (DYGhostGetBool(kGhostBrowseModeKey)) {
+        SEL urlSel = NSSelectorFromString(@"url");
+        if ([request respondsToSelector:urlSel]) {
+            NSString *urlString = [request performSelector:urlSel];
+            if (DYGhostShouldBlockURL(urlString)) {
+                NSLog(@"[DouyinGhostMode] Blocked AWEService request: %@", urlString);
+                return nil;
+            }
+        }
+    }
+    return %orig;
 }
 
 %end

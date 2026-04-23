@@ -1,123 +1,128 @@
-%config(generator=MobileSubstrate)
-
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-static NSString *const kGhostLiveModeKey = @"DYYYLiveGhostMode";
-static NSString *const kGhostBrowseModeKey = @"DYYYGhostMode";
+@interface HTSLiveUser : NSObject
+@property (nonatomic) BOOL secret;
+@property (nonatomic) BOOL isSecret;
+@property (nonatomic) BOOL displayEntranceEffect;
+@end
 
-static BOOL DYGhostGetBool(NSString *key) {
-    return [[NSUserDefaults standardUserDefaults] boolForKey:key];
-}
+@interface IESLiveUserModel : NSObject
+@property (nonatomic) BOOL secret;
+@property (nonatomic) BOOL isSecret;
+@property (nonatomic) BOOL displayEntranceEffect;
+@end
 
-static void DYGhostSetBool(NSString *key, BOOL value) {
-    [[NSUserDefaults standardUserDefaults] setBool:value forKey:key];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-}
+@interface AWEUserModel : NSObject
+@property (nonatomic) BOOL isSecret;
+@end
 
-#pragma mark - Blocking Logic
+@interface BDTrackerProtocol : NSObject
++ (void)eventV3:(NSString *)event params:(NSDictionary *)params;
+@end
 
-static BOOL DYGhostIsVisitorAPI(NSString *urlString) {
-    if (!urlString || !DYGhostGetBool(kGhostBrowseModeKey)) return NO;
-    NSArray *blockedPatterns = @[
-        @"recent_visitor",
-        @"visit_history",
-        @"home/visit",
-        @"profile/visit",
-        @"visitor_list",
-        @"homepage_visitor"
-    ];
-    for (NSString *pattern in blockedPatterns) {
-        if ([urlString containsString:pattern]) return YES;
-    }
-    return NO;
-}
+@interface Tracker : NSObject
++ (void)event:(NSString *)event params:(NSDictionary *)params;
+@end
 
-static BOOL DYGhostShouldBlockEvent(NSString *event) {
-    if (!event || !DYGhostGetBool(kGhostBrowseModeKey)) return NO;
-    NSArray *keywords = @[
-        @"personal_detail",
-        @"profile_pv",
-        @"others_homepage",
-        @"visit_profile",
-        @"shoot_record_play",
-        @"homepage_visit",
-        @"user_profile",
-        @"browse_history",
-        @"view_history",
-        @"home_page_visit",
-        @"visitor",
-        @"profile_view"
-    ];
-    for (NSString *keyword in keywords) {
-        if ([event containsString:keyword]) return YES;
-    }
-    return NO;
-}
-
-#pragma mark - Layer 1: Live Ghost Mode
+// ==========================================
+// Live Ghost Mode
+// ==========================================
 
 %hook HTSLiveUser
-- (BOOL)secret { if (DYGhostGetBool(kGhostLiveModeKey)) return YES; return %orig; }
-- (BOOL)isSecret { if (DYGhostGetBool(kGhostLiveModeKey)) return YES; return %orig; }
-- (BOOL)displayEntranceEffect { if (DYGhostGetBool(kGhostLiveModeKey)) return NO; return %orig; }
-%end
 
-%hook IESLiveUserModel
-- (BOOL)secret { if (DYGhostGetBool(kGhostLiveModeKey)) return YES; return %orig; }
-- (BOOL)isSecret { if (DYGhostGetBool(kGhostLiveModeKey)) return YES; return %orig; }
-- (BOOL)displayEntranceEffect { if (DYGhostGetBool(kGhostLiveModeKey)) return NO; return %orig; }
-%end
-
-%hook AWEUserModel
-- (BOOL)isSecret { if (DYGhostGetBool(kGhostLiveModeKey)) return YES; return %orig; }
-%end
-
-#pragma mark - Layer 2: Tracker SDK Hooks
-
-%hook BDTrackerProtocol
-+ (void)eventV3:(NSString *)event params:(NSDictionary *)params {
-    if (DYGhostShouldBlockEvent(event)) {
-        NSLog(@"[DouyinGhostMode] Blocked BDTracker eventV3: %@", event);
-        return;
-    }
-    %orig;
+- (BOOL)secret {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return YES;
+    return %orig;
 }
-%end
 
-%hook Tracker
-+ (void)event:(NSString *)event params:(NSDictionary *)params {
-    if (DYGhostShouldBlockEvent(event)) {
-        NSLog(@"[DouyinGhostMode] Blocked Tracker event: %@", event);
-        return;
-    }
-    %orig;
+- (BOOL)isSecret {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return YES;
+    return %orig;
 }
-%end
 
-#pragma mark - Layer 3: Safe NSURLSession Interception (visitor API only)
-
-%hook NSURLSession
-
-- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
-    NSString *urlString = request.URL.absoluteString;
-    if (DYGhostIsVisitorAPI(urlString)) {
-        NSLog(@"[DouyinGhostMode] Blocked visitor API: %@", urlString);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (completionHandler) {
-                NSError *error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil];
-                completionHandler(nil, nil, error);
-            }
-        });
-        return nil;
-    }
+- (BOOL)displayEntranceEffect {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return NO;
     return %orig;
 }
 
 %end
 
-#pragma mark - Shake Gesture Settings
+%hook IESLiveUserModel
+
+- (BOOL)secret {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return YES;
+    return %orig;
+}
+
+- (BOOL)isSecret {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return YES;
+    return %orig;
+}
+
+- (BOOL)displayEntranceEffect {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return NO;
+    return %orig;
+}
+
+%end
+
+%hook AWEUserModel
+
+- (BOOL)isSecret {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"]) return YES;
+    return %orig;
+}
+
+%end
+
+// ==========================================
+// Browse Ghost Mode
+// ==========================================
+
+%hook BDTrackerProtocol
+
++ (void)eventV3:(NSString *)event params:(NSDictionary *)params {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYGhostMode"]) {
+        NSArray *blockedEvents = @[
+            @"enter_personal_detail",
+            @"profile_pv",
+            @"others_homepage",
+            @"visit_profile",
+            @"shoot_record_play"
+        ];
+        if ([blockedEvents containsObject:event]) {
+            return;
+        }
+    }
+    %orig;
+}
+
+%end
+
+%hook Tracker
+
++ (void)event:(NSString *)event params:(NSDictionary *)params {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYGhostMode"]) {
+        NSArray *blockedEvents = @[
+            @"enter_personal_detail",
+            @"profile_pv",
+            @"others_homepage",
+            @"visit_profile"
+        ];
+        if ([blockedEvents containsObject:event]) {
+            return;
+        }
+    }
+    %orig;
+}
+
+%end
+
+// ==========================================
+// Shake Gesture Settings
+// ==========================================
 
 static BOOL _dyGhostAlertShowing = NO;
 
@@ -135,21 +140,23 @@ static BOOL _dyGhostAlertShowing = NO;
                                                                    message:@"Toggle features below"
                                                             preferredStyle:UIAlertControllerStyleAlert];
 
-    NSString *liveTitle = DYGhostGetBool(kGhostLiveModeKey) ? @"[ON] Live Ghost Mode" : @"[OFF] Live Ghost Mode";
+    NSString *liveTitle = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"] ? @"[ON] Live Ghost Mode" : @"[OFF] Live Ghost Mode";
     UIAlertAction *liveAction = [UIAlertAction actionWithTitle:liveTitle
                                                          style:UIAlertActionStyleDefault
                                                        handler:^(UIAlertAction *action) {
-        BOOL newVal = !DYGhostGetBool(kGhostLiveModeKey);
-        DYGhostSetBool(kGhostLiveModeKey, newVal);
+        BOOL newVal = ![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYLiveGhostMode"];
+        [[NSUserDefaults standardUserDefaults] setBool:newVal forKey:@"DYYYLiveGhostMode"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
         _dyGhostAlertShowing = NO;
     }];
 
-    NSString *browseTitle = DYGhostGetBool(kGhostBrowseModeKey) ? @"[ON] Browse Ghost Mode" : @"[OFF] Browse Ghost Mode";
+    NSString *browseTitle = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYGhostMode"] ? @"[ON] Browse Ghost Mode" : @"[OFF] Browse Ghost Mode";
     UIAlertAction *browseAction = [UIAlertAction actionWithTitle:browseTitle
                                                            style:UIAlertActionStyleDefault
                                                          handler:^(UIAlertAction *action) {
-        BOOL newVal = !DYGhostGetBool(kGhostBrowseModeKey);
-        DYGhostSetBool(kGhostBrowseModeKey, newVal);
+        BOOL newVal = ![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYGhostMode"];
+        [[NSUserDefaults standardUserDefaults] setBool:newVal forKey:@"DYYYGhostMode"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
         _dyGhostAlertShowing = NO;
     }];
 
@@ -195,34 +202,13 @@ static BOOL _dyGhostAlertShowing = NO;
 
 %end
 
-#pragma mark - Runtime Diagnostics
-
-static void DYGhostLogRuntimeInfo(void) {
-    NSArray *classesToCheck = @[
-        @"BDTrackerProtocol",
-        @"Tracker",
-        @"HTSLiveUser",
-        @"IESLiveUserModel",
-        @"AWEUserModel",
-        @"BDAutoTrackService",
-        @"SSAppLog"
-    ];
-    NSLog(@"[DouyinGhostMode] === Runtime Class Check ===");
-    for (NSString *cls in classesToCheck) {
-        Class c = NSClassFromString(cls);
-        NSLog(@"[DouyinGhostMode] %@: %@", cls, c ? @"EXISTS" : @"NOT FOUND");
-    }
-    NSLog(@"[DouyinGhostMode] === End Class Check ===");
-}
-
 %ctor {
     NSLog(@"[DouyinGhostMode] Plugin loaded");
-    if (![[NSUserDefaults standardUserDefaults] objectForKey:kGhostLiveModeKey]) {
-        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kGhostLiveModeKey];
+    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYLiveGhostMode"]) {
+        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"DYYYLiveGhostMode"];
     }
-    if (![[NSUserDefaults standardUserDefaults] objectForKey:kGhostBrowseModeKey]) {
-        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kGhostBrowseModeKey];
+    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYGhostMode"]) {
+        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"DYYYGhostMode"];
     }
     [[NSUserDefaults standardUserDefaults] synchronize];
-    DYGhostLogRuntimeInfo();
 }

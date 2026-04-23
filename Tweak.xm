@@ -5,6 +5,9 @@
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <sys/socket.h>
+#import <arpa/inet.h>
+#import <netinet/in.h>
 
 static NSString *const kGhostLiveModeKey = @"DYYYLiveGhostMode";
 static NSString *const kGhostBrowseModeKey = @"DYYYGhostMode";
@@ -135,7 +138,7 @@ static int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen
             char ip[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &addr_in->sin_addr, ip, sizeof(ip));
             uint16_t port = ntohs(addr_in->sin_port);
-            DYGhostLog([NSString stringWithFormat:@"SOCK %s:%d", ip, (int)port]);
+            DYGhostLog([NSString stringWithFormat:@"SOCK %s:%d", (const char *)ip, (int)port]);
         }
     }
     return orig_connect(sockfd, addr, addrlen);
@@ -226,7 +229,7 @@ static BOOL _showing = NO;
 
     [a addAction:[UIAlertAction actionWithTitle:@"Stats" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
         _showing=NO;
-        int req=0,sess=0,con=0,ev=0,live=0,body=0,ext=0,sock=0,mark=0,other=0;
+        int req=0,sess=0,con=0,ev=0,live=0,body=0,ext=0,sock=0,mark=0;
         for(NSString *l in _dyLog){
             if([l hasPrefix:@"REQ "]) req++;
             else if([l hasPrefix:@"SESS"]) sess++;
@@ -237,7 +240,6 @@ static BOOL _showing = NO;
             else if([l hasPrefix:@"EXT"]) ext++;
             else if([l hasPrefix:@"SOCK"]) sock++;
             else if([l containsString:@"MARK"]) mark++;
-            else other++;
         }
         NSMutableString *ms=[NSMutableString string];
         [ms appendFormat:@"Requests: %d\nSession: %d\nConnection: %d\nEvents: %d\nLiveHooks: %d\nBodies: %d\nExtURLs: %d\nSockets: %d\nMarks: %d\nTotal: %d",req,sess,con,ev,live,body,ext,sock,mark,(int)_dyLog.count];

@@ -1,9 +1,10 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
-static NSString *const kGhostLiveModeKey = @"DYGhostLiveMode";
-static NSString *const kGhostBrowseModeKey = @"DYGhostBrowseMode";
+static NSString *const kGhostLiveModeKey = @"DYYYLiveGhostMode";
+static NSString *const kGhostBrowseModeKey = @"DYYYGhostMode";
 
 static BOOL DYGhostGetBool(NSString *key) {
     return [[NSUserDefaults standardUserDefaults] boolForKey:key];
@@ -14,86 +15,125 @@ static void DYGhostSetBool(NSString *key, BOOL value) {
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
-// ==========================================
-// 核心功能实现
-// ==========================================
-
-// 直播间全局隐身模式
-%hook HTSLiveUser
-
-- (BOOL)secret {
-    if (DYGhostGetBool(kGhostLiveModeKey)) return YES;
-    return %orig;
+static void DYGhostHookIfClassExists(NSString *className, SEL sel, IMP newIMP, IMP *origIMP) {
+    Class cls = objc_getClass(className.UTF8String);
+    if (!cls) {
+        NSLog(@"[DouyinGhostMode] Class %@ not found, skipping hook", className);
+        return;
+    }
+    Method method = class_getInstanceMethod(cls, sel);
+    if (!method) {
+        NSLog(@"[DouyinGhostMode] Method %@ on %@ not found, skipping", NSStringFromSelector(sel), className);
+        return;
+    }
+    *origIMP = method_setImplementation(method, newIMP);
+    NSLog(@"[DouyinGhostMode] Hooked %@ -> %@ successfully", className, NSStringFromSelector(sel));
 }
 
-- (BOOL)isSecret {
-    if (DYGhostGetBool(kGhostLiveModeKey)) return YES;
-    return %orig;
+static void DYGhostHookClassMethodIfClassExists(NSString *className, SEL sel, IMP newIMP, IMP *origIMP) {
+    Class cls = objc_getClass(className.UTF8String);
+    if (!cls) {
+        NSLog(@"[DouyinGhostMode] Class %@ not found, skipping class hook", className);
+        return;
+    }
+    Method method = class_getClassMethod(cls, sel);
+    if (!method) {
+        NSLog(@"[DouyinGhostMode] Class method %@ on %@ not found, skipping", NSStringFromSelector(sel), className);
+        return;
+    }
+    *origIMP = method_setImplementation(method, newIMP);
+    NSLog(@"[DouyinGhostMode] Hooked class method %@ -> %@ successfully", className, NSStringFromSelector(sel));
 }
 
-- (BOOL)displayEntranceEffect {
+#pragma mark - Live Ghost Mode (Instance Method Hooks)
+
+static IMP orig_HTSLiveUser_secret = NULL;
+static IMP orig_HTSLiveUser_isSecret = NULL;
+static IMP orig_HTSLiveUser_displayEntranceEffect = NULL;
+
+static BOOL replaced_HTSLiveUser_secret(id self, SEL _cmd) {
+    if (DYGhostGetBool(kGhostLiveModeKey)) return YES;
+    return ((BOOL(*)(id, SEL))orig_HTSLiveUser_secret)(self, _cmd);
+}
+
+static BOOL replaced_HTSLiveUser_isSecret(id self, SEL _cmd) {
+    if (DYGhostGetBool(kGhostLiveModeKey)) return YES;
+    return ((BOOL(*)(id, SEL))orig_HTSLiveUser_isSecret)(self, _cmd);
+}
+
+static BOOL replaced_HTSLiveUser_displayEntranceEffect(id self, SEL _cmd) {
     if (DYGhostGetBool(kGhostLiveModeKey)) return NO;
-    return %orig;
+    return ((BOOL(*)(id, SEL))orig_HTSLiveUser_displayEntranceEffect)(self, _cmd);
 }
 
-%end
+static IMP orig_IESLiveUserModel_secret = NULL;
+static IMP orig_IESLiveUserModel_isSecret = NULL;
+static IMP orig_IESLiveUserModel_displayEntranceEffect = NULL;
 
-%hook IESLiveUserModel
-
-- (BOOL)secret {
+static BOOL replaced_IESLiveUserModel_secret(id self, SEL _cmd) {
     if (DYGhostGetBool(kGhostLiveModeKey)) return YES;
-    return %orig;
+    return ((BOOL(*)(id, SEL))orig_IESLiveUserModel_secret)(self, _cmd);
 }
 
-- (BOOL)isSecret {
+static BOOL replaced_IESLiveUserModel_isSecret(id self, SEL _cmd) {
     if (DYGhostGetBool(kGhostLiveModeKey)) return YES;
-    return %orig;
+    return ((BOOL(*)(id, SEL))orig_IESLiveUserModel_isSecret)(self, _cmd);
 }
 
-- (BOOL)displayEntranceEffect {
+static BOOL replaced_IESLiveUserModel_displayEntranceEffect(id self, SEL _cmd) {
     if (DYGhostGetBool(kGhostLiveModeKey)) return NO;
-    return %orig;
+    return ((BOOL(*)(id, SEL))orig_IESLiveUserModel_displayEntranceEffect)(self, _cmd);
 }
 
-%end
+static IMP orig_AWEUserModel_isSecret = NULL;
 
-%hook AWEUserModel
-
-- (BOOL)isSecret {
+static BOOL replaced_AWEUserModel_isSecret(id self, SEL _cmd) {
     if (DYGhostGetBool(kGhostLiveModeKey)) return YES;
-    return %orig;
+    return ((BOOL(*)(id, SEL))orig_AWEUserModel_isSecret)(self, _cmd);
 }
 
-%end
+#pragma mark - Browse Ghost Mode (Class Method Hooks)
 
-// 全局无痕浏览模式 (拦截字节跳动底层埋点 SDK)
-%hook BDTrackerProtocol
+static NSArray *DYGhostBlockedEvents(void) {
+    static NSArray *events = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        events = @[
+            @"enter_personal_detail",
+            @"profile_pv",
+            @"others_homepage",
+            @"visit_profile",
+            @"shoot_record_play"
+        ];
+    });
+    return events;
+}
 
-+ (void)eventV3:(NSString *)event params:(NSDictionary *)params {
+static IMP orig_BDTrackerProtocol_eventV3 = NULL;
+
+static void replaced_BDTrackerProtocol_eventV3(id self, SEL _cmd, NSString *event, NSDictionary *params) {
     if (DYGhostGetBool(kGhostBrowseModeKey)) {
-        NSArray *blockedEvents = @[@"enter_personal_detail", @"profile_pv", @"others_homepage", @"visit_profile", @"shoot_record_play"];
-        if ([blockedEvents containsObject:event]) {
+        if ([DYGhostBlockedEvents() containsObject:event]) {
+            NSLog(@"[DouyinGhostMode] Blocked BDTracker event: %@", event);
             return;
         }
     }
-    %orig;
+    ((void(*)(id, SEL, NSString *, NSDictionary *))orig_BDTrackerProtocol_eventV3)(self, _cmd, event, params);
 }
 
-%end
+static IMP orig_Tracker_event = NULL;
 
-%hook Tracker
-
-+ (void)event:(NSString *)event params:(NSDictionary *)params {
+static void replaced_Tracker_event(id self, SEL _cmd, NSString *event, NSDictionary *params) {
     if (DYGhostGetBool(kGhostBrowseModeKey)) {
-        NSArray *blockedEvents = @[@"enter_personal_detail", @"profile_pv", @"others_homepage", @"visit_profile"];
-        if ([blockedEvents containsObject:event]) {
+        if ([DYGhostBlockedEvents() containsObject:event]) {
+            NSLog(@"[DouyinGhostMode] Blocked Tracker event: %@", event);
             return;
         }
     }
-    %orig;
+    ((void(*)(id, SEL, NSString *, NSDictionary *))orig_Tracker_event)(self, _cmd, event, params);
 }
 
-%end
+#pragma mark - Shake Gesture Settings
 
 static BOOL _dyGhostAlertShowing = NO;
 
@@ -108,22 +148,26 @@ static BOOL _dyGhostAlertShowing = NO;
     _dyGhostAlertShowing = YES;
 
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Ghost Mode"
-                                                                   message:nil
+                                                                   message:@"Toggle features below"
                                                             preferredStyle:UIAlertControllerStyleAlert];
 
-    NSString *liveTitle = DYGhostGetBool(kGhostLiveModeKey) ? @"Live Ghost: ON" : @"Live Ghost: OFF";
+    NSString *liveTitle = DYGhostGetBool(kGhostLiveModeKey) ? @"[ON] Live Ghost Mode" : @"[OFF] Live Ghost Mode";
     UIAlertAction *liveAction = [UIAlertAction actionWithTitle:liveTitle
                                                          style:UIAlertActionStyleDefault
                                                        handler:^(UIAlertAction *action) {
-        DYGhostSetBool(kGhostLiveModeKey, !DYGhostGetBool(kGhostLiveModeKey));
+        BOOL newVal = !DYGhostGetBool(kGhostLiveModeKey);
+        DYGhostSetBool(kGhostLiveModeKey, newVal);
+        NSLog(@"[DouyinGhostMode] Live Ghost Mode set to: %@", newVal ? @"ON" : @"OFF");
         _dyGhostAlertShowing = NO;
     }];
 
-    NSString *browseTitle = DYGhostGetBool(kGhostBrowseModeKey) ? @"Browse Ghost: ON" : @"Browse Ghost: OFF";
+    NSString *browseTitle = DYGhostGetBool(kGhostBrowseModeKey) ? @"[ON] Browse Ghost Mode" : @"[OFF] Browse Ghost Mode";
     UIAlertAction *browseAction = [UIAlertAction actionWithTitle:browseTitle
                                                            style:UIAlertActionStyleDefault
                                                          handler:^(UIAlertAction *action) {
-        DYGhostSetBool(kGhostBrowseModeKey, !DYGhostGetBool(kGhostBrowseModeKey));
+        BOOL newVal = !DYGhostGetBool(kGhostBrowseModeKey);
+        DYGhostSetBool(kGhostBrowseModeKey, newVal);
+        NSLog(@"[DouyinGhostMode] Browse Ghost Mode set to: %@", newVal ? @"ON" : @"OFF");
         _dyGhostAlertShowing = NO;
     }];
 
@@ -169,8 +213,50 @@ static BOOL _dyGhostAlertShowing = NO;
 
 %end
 
+#pragma mark - Dynamic Hook Registration
+
+static void DYGhostPerformHooks(void) {
+    NSLog(@"[DouyinGhostMode] Starting dynamic hook registration...");
+
+    DYGhostHookIfClassExists(@"HTSLiveUser", @selector(secret),
+        (IMP)replaced_HTSLiveUser_secret, &orig_HTSLiveUser_secret);
+    DYGhostHookIfClassExists(@"HTSLiveUser", @selector(isSecret),
+        (IMP)replaced_HTSLiveUser_isSecret, &orig_HTSLiveUser_isSecret);
+    DYGhostHookIfClassExists(@"HTSLiveUser", @selector(displayEntranceEffect),
+        (IMP)replaced_HTSLiveUser_displayEntranceEffect, &orig_HTSLiveUser_displayEntranceEffect);
+
+    DYGhostHookIfClassExists(@"IESLiveUserModel", @selector(secret),
+        (IMP)replaced_IESLiveUserModel_secret, &orig_IESLiveUserModel_secret);
+    DYGhostHookIfClassExists(@"IESLiveUserModel", @selector(isSecret),
+        (IMP)replaced_IESLiveUserModel_isSecret, &orig_IESLiveUserModel_isSecret);
+    DYGhostHookIfClassExists(@"IESLiveUserModel", @selector(displayEntranceEffect),
+        (IMP)replaced_IESLiveUserModel_displayEntranceEffect, &orig_IESLiveUserModel_displayEntranceEffect);
+
+    DYGhostHookIfClassExists(@"AWEUserModel", @selector(isSecret),
+        (IMP)replaced_AWEUserModel_isSecret, &orig_AWEUserModel_isSecret);
+
+    DYGhostHookClassMethodIfClassExists(@"BDTrackerProtocol", @selector(eventV3:params:),
+        (IMP)replaced_BDTrackerProtocol_eventV3, &orig_BDTrackerProtocol_eventV3);
+
+    DYGhostHookClassMethodIfClassExists(@"Tracker", @selector(event:params:),
+        (IMP)replaced_Tracker_event, &orig_Tracker_event);
+
+    NSLog(@"[DouyinGhostMode] Dynamic hook registration complete");
+}
+
+static void DYGhostRegisterDelayedHooks(void) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        DYGhostPerformHooks();
+    });
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        DYGhostPerformHooks();
+    });
+}
+
 %ctor {
-    NSLog(@"[DouyinGhostMode] Loaded");
+    NSLog(@"[DouyinGhostMode] Plugin loaded");
+
     if (![[NSUserDefaults standardUserDefaults] objectForKey:kGhostLiveModeKey]) {
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kGhostLiveModeKey];
     }
@@ -178,4 +264,7 @@ static BOOL _dyGhostAlertShowing = NO;
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kGhostBrowseModeKey];
     }
     [[NSUserDefaults standardUserDefaults] synchronize];
+
+    DYGhostPerformHooks();
+    DYGhostRegisterDelayedHooks();
 }

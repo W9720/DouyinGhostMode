@@ -5,8 +5,6 @@
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <CoreFoundation/CoreFoundation.h>
-#import <sys/socket.h>
-#import <arpa/inet.h>
 
 static NSString *const kGhostLiveModeKey = @"DYYYLiveGhostMode";
 static NSString *const kGhostBrowseModeKey = @"DYYYGhostMode";
@@ -19,7 +17,7 @@ static void DYGhostLog(NSString *msg) {
     NSLog(@"[DYGhost] %@", msg);
     if (!_dyLog) _dyLog = [NSMutableArray array];
     [_dyLog addObject:msg];
-    if (_dyLog.count > 600) [_dyLog removeObjectsInRange:NSMakeRange(0,200)];
+    if (_dyLog.count > 500) [_dyLog removeObjectsInRange:NSMakeRange(0,150)];
 }
 
 static BOOL DYIsDouyinURL(NSString *s) {
@@ -39,10 +37,7 @@ static BOOL DYIsNoiseURL(NSString *s) {
     return NO;
 }
 
-static int _dyViewScanCount = 0;
-static NSSet *_dyLiveKeywords = nil;
-
-#pragma mark - Live Ghost: data layer
+#pragma mark - Live Ghost
 
 %hook HTSLiveUser
 - (BOOL)secret {
@@ -70,99 +65,7 @@ static NSSet *_dyLiveKeywords = nil;
 }
 %end
 
-#pragma mark - Live Ghost: VIEW CLASS SCANNER - find real UI class names!
-
-static void DYInitLiveKeywords(void) {
-    if (!_dyLiveKeywords) {
-        _dyLiveKeywords = [NSSet setWithArray:@[
-            @"Audience",@"audience",@"Member",@"member",@"UserList",@"userlist",
-            @"Viewer",@"viewer",@"Guest",@"guest",@"Follower",@"follower",
-            @"Entrance",@"entrance",@"EnterRoom",@"enterroom",@"Enter",@"enter",
-            @"Welcome",@"welcome",@"JoinRoom",@"joinroom",@"Join",@"join",
-            @"ComeIn",@"comein",@"UserEnter",@"userenter",@"InRoom",@"inroom",
-            @"OnlineUser",@"onlineuser",@"RoomUser",@"roomuser",
-            @"Notice",@"notice",@"Banner",@"banner",@"Toast",@"toast",
-            @"Tip",@"tip",@"Alert",@"alert",@"Popup",@"popup",
-            @"Notify",@"notify",@"Notification",@"notification",
-            @"Badge",@"badge",@"Tag",@"tag",@"Label",
-            @"AvatarRow",@"avatarrow",@"UserCell",@"usercell",
-            @"ListItem",@"listitem",@"RowView",@"rowview",
-            @"SpeakBar",@"speakbar",@"ChatRow",@"chatrow",
-            @"GiftAnim",@"giftanim",@"Effect",@"effect",
-            @"TopFan",@"topfan",@"Rich",@"rich",@"Super",@"super"
-        ]];
-    }
-}
-
-static BOOL DYShouldHideView(NSString *clsName) {
-    if (!clsName || !DYGhostGetBool(kGhostLiveModeKey)) return NO;
-    DYInitLiveKeywords();
-    for (NSString *kw in _dyLiveKeywords) {
-        if ([clsName rangeOfString:kw options:NSCaseInsensitiveSearch].location != NSNotFound)
-            return YES;
-    }
-    return NO;
-}
-
-%hook UIView
-- (instancetype)initWithFrame:(CGRect)frame {
-    UIView *v = %orig;
-    if (v && DYGhostGetBool(kGhostLiveModeKey)) {
-        NSString *cls = NSStringFromClass([self class]);
-        _dyViewScanCount++;
-        if (_dyViewScanCount <= 300 || DYShouldHideView(cls)) {
-            CGRect f = frame;
-            DYGhostLog([NSString stringWithFormat:@"VIEW [%@] %.0fx%.0f+%+.0f+%+.0f #%d", cls,
-                f.size.width, f.size.height, f.origin.x, f.origin.y, _dyViewScanCount]);
-            if (DYShouldHideView(cls)) {
-                DYGhostLog([NSString stringWithFormat:@"HIDE %@", cls]);
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.01 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    v.hidden = YES;
-                    v.alpha = 0;
-                });
-            }
-        }
-    }
-    return v;
-}
-- (void)didMoveToWindow {
-    %orig;
-    if (self.window && DYGhostGetBool(kGhostLiveModeKey)) {
-        NSString *cls = NSStringFromClass([self class]);
-        if (DYShouldHideView(cls)) {
-            DYGhostLog([NSString stringWithFormat:@"HIDE-MOVE %@", cls]);
-            self.hidden = YES;
-            self.alpha = 0;
-        }
-    }
-}
-%end
-
-%hook UILabel
-- (instancetype)initWithFrame:(CGRect)frame {
-    UILabel *l = %orig;
-    if (l && DYGhostGetBool(kGhostLiveModeKey)) {
-        NSString *cls = NSStringFromClass([self class]);
-        if (DYShouldHideView(cls)) {
-            DYGhostLog([NSString stringWithFormat:@"HIDE-LABEL %@ text=%@", cls, l.text ?: @""]);
-            l.hidden = YES; l.alpha = 0;
-        }
-    }
-    return l;
-}
-- (void)setText:(NSString *)text {
-    %orig;
-    if (text && DYGhostGetBool(kGhostLiveModeKey)) {
-        NSString *cls = NSStringFromClass([self class]);
-        if (DYShouldHideView(cls)) {
-            DYGhostLog([NSString stringWithFormat:@"HIDE-LABEL-TEXT %@ '%@'", cls, text]);
-            self.hidden = YES; self.alpha = 0;
-        }
-    }
-}
-%end
-
-#pragma mark - Browse DIAG: log all requests
+#pragma mark - Browse DIAG: log only, no block, filter noise
 
 %hook NSMutableURLRequest
 - (void)setURL:(NSURL *)url {
@@ -221,20 +124,18 @@ static BOOL DYShouldHideView(NSString *clsName) {
 }
 %end
 
-#pragma mark - Socket level diagnostic: log all connections
+#pragma mark - Socket diagnostic: log connections only, do NOT block
 
 static int (*orig_connect)(int, const struct sockaddr *, socklen_t) = NULL;
 
 static int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
-    if (DYGhostGetBool(kGhostBrowseModeKey) || DYGhostGetBool(kGhostLiveModeKey)) {
+    if (DYGhostGetBool(kGhostBrowseModeKey)) {
         if (addr && addr->sa_family == AF_INET) {
             struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
             char ip[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &addr_in->sin_addr, ip, sizeof(ip));
             uint16_t port = ntohs(addr_in->sin_port);
-            DYGhostLog([NSString stringWithFormat:@"SOCK connect to %s:%d", ip, (int)port]);
-        } else if (addr && addr->sa_family == AF_INET6) {
-            DYGhostLog(@"SOCK connect IPv6");
+            DYGhostLog([NSString stringWithFormat:@"SOCK %s:%d", ip, (int)port]);
         }
     }
     return orig_connect(sockfd, addr, addrlen);
@@ -290,9 +191,9 @@ static BOOL _showing = NO;
 + (void)show:(UIViewController *)p {
     if (!p || _showing) return;
     _showing = YES;
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Ghost Mode v7" message:@"" preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Ghost Mode v7-SAFE" message:@"" preferredStyle:UIAlertControllerStyleAlert];
 
-    NSString *lt = DYGhostGetBool(kGhostLiveModeKey)?@"[ON] Live SCAN":@"[OFF] Live";
+    NSString *lt = DYGhostGetBool(kGhostLiveModeKey)?@"[ON] Live":@"[OFF] Live";
     [a addAction:[UIAlertAction actionWithTitle:lt style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
         [[NSUserDefaults standardUserDefaults] setBool:!DYGhostGetBool(kGhostLiveModeKey) forKey:kGhostLiveModeKey];
         [[NSUserDefaults standardUserDefaults] synchronize]; _showing=NO;
@@ -309,7 +210,7 @@ static BOOL _showing = NO;
     }]];
 
     [a addAction:[UIAlertAction actionWithTitle:@"Clear & Test" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
-        _dyLog=[NSMutableArray array]; _dyViewScanCount=0; DYGhostLog(@">>> Cleared <<<"); _showing=NO;
+        _dyLog=[NSMutableArray array]; DYGhostLog(@">>> Cleared <<<"); _showing=NO;
     }]];
 
     [a addAction:[UIAlertAction actionWithTitle:@"View Logs" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
@@ -325,7 +226,7 @@ static BOOL _showing = NO;
 
     [a addAction:[UIAlertAction actionWithTitle:@"Stats" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
         _showing=NO;
-        int req=0,sess=0,con=0,ev=0,live=0,body=0,ext=0,sock=0,view=0,hide=0,mark=0,other=0;
+        int req=0,sess=0,con=0,ev=0,live=0,body=0,ext=0,sock=0,mark=0,other=0;
         for(NSString *l in _dyLog){
             if([l hasPrefix:@"REQ "]) req++;
             else if([l hasPrefix:@"SESS"]) sess++;
@@ -335,13 +236,11 @@ static BOOL _showing = NO;
             else if([l hasPrefix:@"BODY"]||[l hasPrefix:@"BIN"]) body++;
             else if([l hasPrefix:@"EXT"]) ext++;
             else if([l hasPrefix:@"SOCK"]) sock++;
-            else if([l hasPrefix:@"VIEW "]||[l hasPrefix:@"HIDE-LABEL"]) view++;
-            else if([l hasPrefix:@"HIDE "]||[l hasPrefix:@"HIDE-MOVE"]) hide++;
             else if([l containsString:@"MARK"]) mark++;
             else other++;
         }
         NSMutableString *ms=[NSMutableString string];
-        [ms appendFormat:@"Requests: %d\nSession: %d\nConnection: %d\nEvents: %d\nLiveHooks: %d\nBodies: %d\nExtURLs: %d\nSockets: %d\nViews: %d\nHidden: %d\nMarks: %d\nOther: %d\nTotal: %d\nViewsScanned: %d",req,sess,con,ev,live,body,ext,sock,view,hide,mark,other,(int)_dyLog.count,_dyViewScanCount];
+        [ms appendFormat:@"Requests: %d\nSession: %d\nConnection: %d\nEvents: %d\nLiveHooks: %d\nBodies: %d\nExtURLs: %d\nSockets: %d\nMarks: %d\nTotal: %d",req,sess,con,ev,live,body,ext,sock,mark,(int)_dyLog.count];
         UIViewController *v=p;while(v.presentedViewController)v=v.presentedViewController;
         UIAlertController *sa=[UIAlertController alertControllerWithTitle:@"Stats" message:ms preferredStyle:UIAlertControllerStyleAlert];
         [sa addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
@@ -372,8 +271,7 @@ static BOOL _showing = NO;
 #pragma mark - Constructor
 
 %ctor{
-    DYGhostLog(@"Loading v7...");
-    DYInitLiveKeywords();
+    DYGhostLog(@"Loading v7-SAFE...");
 
     void *h=dlopen("/usr/lib/libsystem_kernel.dylib",RTLD_NOW);
     if(h){
@@ -383,10 +281,6 @@ static BOOL _showing = NO;
             DYGhostLog(@"Socket: connect() HOOKED");
         }else{ DYGhostLog(@"Socket: connect NOT found");}
     }else{ DYGhostLog(@"Socket: dlopen FAIL");}
-
-    void *cf=dlopen("/System/Library/Frameworks/CFNetwork.framework/CFNetwork",RTLD_NOW);
-    if(cf){ typedef CFHTTPMessageRef(*Fn)(CFAllocatorRef,CFURLRef,CFStringRef,CFStringRef,CFDictionaryRef); Fn f=(Fn)dlsym(cf,"CFHTTPMessageCreateRequest"); if(f) DYGhostLog(@"CFNetwork: FOUND"); else DYGhostLog(@"CFNetwork: NOT found");}
-    else{ DYGhostLog(@"CFNetwork: FAIL");}
 
     NSUserDefaults *u=[NSUserDefaults standardUserDefaults];
     if(![u objectForKey:kGhostLiveModeKey])[u setBool:NO forKey:kGhostLiveModeKey];

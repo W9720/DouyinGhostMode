@@ -12,16 +12,17 @@ static BOOL DYGhostGetBool(NSString *key) {
 }
 
 static NSMutableArray *_dyLog = nil;
+static BOOL _dyCaptureMode = NO;
 
 static void DYGhostLog(NSString *msg) {
     NSLog(@"%@", msg);
     if (!_dyLog) _dyLog = [NSMutableArray array];
     [_dyLog addObject:msg];
-    if (_dyLog.count > 200) [_dyLog removeObjectsInRange:NSMakeRange(0,50)];
+    if (_dyLog.count > 300) [_dyLog removeObjectsInRange:NSMakeRange(0,100)];
 }
 
 // ==========================================
-// Live Ghost - proven to work
+// Live Ghost - proven working
 // ==========================================
 
 %hook HTSLiveUser
@@ -47,10 +48,82 @@ static void DYGhostLog(NSString *msg) {
 %end
 
 // ==========================================
-// Browse Ghost - URL monitoring only (safe, no blocking yet)
+// Browse Ghost - Capture mode using %hook (SAFE, no NSInvocation)
+// These are the real method signatures found by our earlier scan
 // ==========================================
 
+%hook BDTrackerProtocol
+
++ (id)event:(id)a category:(id)b label:(id)c value:(id)d extValue:(id)e eventType:(id)f {
+    if (_dyCaptureMode) {
+        NSString *lbl = ([c isKindOfClass:[NSString class]]) ? c : @"";
+        NSString *val = ([d isKindOfClass:[NSString class]]) ? d : @"";
+        DYGhostLog([NSString stringWithFormat:@"CAP[BDTP]: label=%@ value=%@", lbl, val]);
+    }
+    return %orig;
+}
+
++ (void)_event:(id)data eventIndex:(id)index {
+    if (_dyCaptureMode) {
+        DYGhostLog([NSString stringWithFormat:@"CAP[BDTP]: _event data=%@ idx=%@",
+            [data isKindOfClass:[NSString class]] ? data : NSStringFromClass([data class]),
+            index]);
+    }
+    %orig;
+}
+
+%end
+
+%hook TTTracker
+
++ (id)event:(id)a category:(id)b label:(id)c value:(id)d extValue:(id)e eventType:(id)f {
+    if (_dyCaptureMode) {
+        NSString *lbl = ([c isKindOfClass:[NSString class]]) ? c : @"";
+        NSString *val = ([d isKindOfClass:[NSString class]]) ? d : @"";
+        DYGhostLog([NSString stringWithFormat:@"CAP[TT]: label=%@ value=%@", lbl, val]);
+    }
+    return %orig;
+}
+
++ (void)_event:(id)data eventIndex:(id)index {
+    if (_dyCaptureMode) {
+        DYGhostLog([NSString stringWithFormat:@"CAP[TT]: _event data=%@ idx=%@",
+            [data isKindOfClass:[NSString class]] ? data : NSStringFromClass([data class]),
+            index]);
+    }
+    %orig;
+}
+
+%end
+
+%hook BDTGTrackerKit
+
++ (id)event:(id)a category:(id)b label:(id)c value:(id)d extValue:(id)e eventType:(id)f {
+    if (_dyCaptureMode) {
+        NSString *lbl = ([c isKindOfClass:[NSString class]]) ? c : @"";
+        NSString *val = ([d isKindOfClass:[NSString class]]) ? d : @"";
+        DYGhostLog([NSString stringWithFormat:@"CAP[BDTG]: label=%@ value=%@", lbl, val]);
+    }
+    return %orig;
+}
+
+%end
+
+%hook IESLCTrackerService
+
++ (id)event:(id)a category:(id)b label:(id)c value:(id)d extValue:(id)e eventType:(id)f {
+    if (_dyCaptureMode) {
+        NSString *lbl = ([c isKindOfClass:[NSString class]]) ? c : @"";
+        NSString *val = ([d isKindOfClass:[NSString class]]) ? d : @"";
+        DYGhostLog([NSString stringWithFormat:@"CAP[IESLC]: label=%@ value=%@", lbl, val]);
+    }
+    return %orig;
+}
+
+%end
+
 %hook NSURLSession
+
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)req completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
     if (req.URL) {
         NSString *host = req.URL.host ?: @"";
@@ -96,16 +169,24 @@ static BOOL _showing = NO;
         [[NSUserDefaults standardUserDefaults] setBool:!DYGhostGetBool(kGhostBrowseModeKey) forKey:kGhostBrowseModeKey];
         [[NSUserDefaults standardUserDefaults] synchronize]; _showing = NO;
     }]];
+
+    NSString *ct = _dyCaptureMode ? @"[ON] Capture" : @"[OFF] Capture";
+    [a addAction:[UIAlertAction actionWithTitle:ct style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
+        _dyCaptureMode = !_dyCaptureMode;
+        DYGhostLog([NSString stringWithFormat:@"Capture mode: %@", _dyCaptureMode ? @"ON" : @"OFF"]);
+        _showing = NO;
+    }]];
+
     [a addAction:[UIAlertAction actionWithTitle:@"Clear & Test" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
         _dyLog = [NSMutableArray array];
-        DYGhostLog(@"Logs cleared. Now: enter live room OR visit profile.");
+        DYGhostLog(@"Cleared. Now test: enter live room + visit profile.");
         _showing = NO;
     }]];
     [a addAction:[UIAlertAction actionWithTitle:@"View Logs" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x){
         _showing = NO;
         NSMutableString *t = [NSMutableString string];
         if (_dyLog && _dyLog.count > 0) for (NSString *l in [_dyLog reverseObjectEnumerator]) [t appendFormat:@"%@\n", l];
-        else t.string = @"No logs.\n1. Clear & Test\n2. Do action\n3. View Logs";
+        else t.string = @"No logs.\n1. Turn ON Capture\n2. Clear & Test\n3. Do actions\n4. View Logs";
         UIViewController *v = p; while(v.presentedViewController) v=v.presentedViewController;
         UIAlertController *l = [UIAlertController alertControllerWithTitle:@"Logs" message:t preferredStyle:UIAlertControllerStyleAlert];
         [l addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];

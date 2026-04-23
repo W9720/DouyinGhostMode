@@ -131,8 +131,8 @@ static void DYGhostInstallHooks(void) {
     for (int i = 0; i < 4; i++) {
         if (!trackers[i].cls) continue;
         Method m = class_getClassMethod(trackers[i].cls, trackers[i].sel);
-        if (m) { *(trackers[i].origImp) = method_setImplementation(m, trackers[i].newImp); DYGhostLog([NSString stringWithFormat:@"HOOKED: %@ +event:...", trackers[i].name]); }
-        else { DYGhostLog([NSString stringWithFormat:@"SKIP: %@ +event:... not found", trackers[i].name]); }
+        if (m) { *(trackers[i].origImp) = method_setImplementation(m, trackers[i].newImp); DYGhostLog([NSString stringWithFormat:@"HOOKED: %s +event:...", trackers[i].name]); }
+        else { DYGhostLog([NSString stringWithFormat:@"SKIP: %s +event:... not found", trackers[i].name]); }
     }
 
     DYGhostLog(@"Done!");
